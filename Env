@@ -1,0 +1,14 @@
+# Occu-Med Backend — Environment Variables
+# Copy this file to .env and fill in your values
+# NEVER commit .env to git
+
+# Your SAM.gov API key
+SAM_API_KEY=SAM-21d23a6b-21fd-4797-b4be-aefa09832f38
+
+# Port (Render sets this automatically, leave as 3001 for local dev)
+PORT=3001
+
+# Your frontend URL — restrict CORS in production
+# Example: https://your-portal.netlify.app
+# Use * to allow all origins (fine for dev, not recommended for prod)
+ALLOWED_ORIGIN=*
