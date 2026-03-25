@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const https = require('https');
+const cheerio = require('cheerio');
 
 require('dotenv').config({ path: './Env' });
 
@@ -79,12 +80,21 @@ const OCC_KEYWORDS_BATCHES = [
   ['industrial hygiene', 'physical examination', 'contractor medical', 'deployment medical', 'force health'],
 ];
 
-async function usaSpendingSearch({ awardTypeCodes, source, noticeType, baseType, daysBack = 90, label = '' }) {
+async function usaSpendingSearch({ awardTypeCodes, source, noticeType, baseType, daysBack = 90, label = '', extraKeywords = [] }) {
   const { start, end } = dateRange(daysBack);
   const seen = new Set();
   const results = [];
 
-  for (const batch of OCC_KEYWORDS_BATCHES) {
+  // Append extra custom keywords as an additional batch if provided
+  const allBatches = [...OCC_KEYWORDS_BATCHES];
+  if (extraKeywords.length > 0) {
+    // Split into batches of 5
+    for (let i = 0; i < extraKeywords.length; i += 5) {
+      allBatches.push(extraKeywords.slice(i, i + 5));
+    }
+  }
+
+  for (const batch of allBatches) {
     const body = JSON.stringify({
       filters: {
         time_period: [{ start_date: start, end_date: end }],
@@ -196,37 +206,39 @@ async function fetchSAM() {
 }
 
 // ── Source 2: USASpending — Contract Awards (definitive contracts) ─────────────
-async function fetchUSASpending(daysBack = 90) {
+async function fetchUSASpending(daysBack = 90, extraKeywords = []) {
   console.log('\nFetching USASpending contract awards...');
   return usaSpendingSearch({
     awardTypeCodes: ['A', 'B', 'C', 'D'],
     source: 'USA', noticeType: 'Contract Award', baseType: 'Award',
-    daysBack, label: 'USASpending'
+    daysBack, label: 'USASpending', extraKeywords
   });
 }
 
 // ── Source 3: IDV / IDIQ contracts ────────────────────────────────────────────
 // Indefinite Delivery Vehicles — umbrella contracts where occ med task orders get issued.
 // This is where most ongoing occ med federal work actually lives.
-async function fetchIDV(daysBack = 180) {
+async function fetchIDV(daysBack = 180, extraKeywords = []) {
   console.log('\nFetching IDV/IDIQ contracts...');
   return usaSpendingSearch({
     awardTypeCodes: ['IDV_A', 'IDV_B', 'IDV_B_A', 'IDV_B_B', 'IDV_B_C', 'IDV_C', 'IDV_D', 'IDV_E'],
     source: 'IDV', noticeType: 'IDIQ / Indefinite Delivery Vehicle', baseType: 'IDV',
-    daysBack, label: 'IDV'
+    daysBack, label: 'IDV', extraKeywords
   });
 }
 
 // ── Source 4: Federal Subcontracts ────────────────────────────────────────────
 // Prime contractors subbing out occ med work — Concentra, Leidos, SAIC, etc.
 // Shows who the real delivery chain is and where Occu-Med could fit as a sub.
-async function fetchSubawards(daysBack = 90) {
+async function fetchSubawards(daysBack = 90, extraKeywords = []) {
   console.log('\nFetching federal subawards...');
   const { start, end } = dateRange(daysBack);
   const seen = new Set();
   const results = [];
 
-  for (const batch of OCC_KEYWORDS_BATCHES.slice(0, 2)) {
+  const subBatches = [...OCC_KEYWORDS_BATCHES.slice(0, 2)];
+  if (extraKeywords && extraKeywords.length > 0) subBatches.push(extraKeywords.slice(0, 5));
+  for (const batch of subBatches) {
     const body = JSON.stringify({
       filters: {
         time_period: [{ start_date: start, end_date: end }],
@@ -277,12 +289,12 @@ async function fetchSubawards(daysBack = 90) {
 }
 
 // ── Source 5: Federal Grants & Assistance ─────────────────────────────────────
-async function fetchGrants(daysBack = 90) {
+async function fetchGrants(daysBack = 90, extraKeywords = []) {
   console.log('\nFetching federal grants/assistance...');
   return usaSpendingSearch({
     awardTypeCodes: ['02', '03', '04', '05'],
     source: 'GRANTS', noticeType: 'Federal Grant / Assistance', baseType: 'Grant',
-    daysBack, label: 'Grants'
+    daysBack, label: 'Grants', extraKeywords
   });
 }
 
@@ -324,40 +336,547 @@ async function fetchSBIR() {
   return results;
 }
 
+
+// ── Tango by MakeGov ─────────────────────────────────────────────────────────
+// Unified federal procurement API — normalizes SAM, FPDS, USASpending + forecasts
+// Free tier: 100 req/day. Get key at tango.makegov.com
+// Set env var TANGO_API_KEY in your Render environment variables
+
+const TANGO_KEY = process.env.TANGO_API_KEY || '';
+const OCC_TERMS = [
+  'occupational health', 'occupational medicine', 'drug testing',
+  'pre-employment physical', 'medical surveillance', 'fit for duty',
+  'fitness for duty', 'employee health screening', 'audiometric',
+  'industrial hygiene', 'deployment medical', 'force health protection'
+];
+
+async function fetchTango() {
+  if (!TANGO_KEY) { console.log('Tango: no API key set (TANGO_API_KEY)'); return []; }
+  const seen = new Set();
+  const results = [];
+
+  for (const term of OCC_TERMS.slice(0, 4)) { // 4 terms = 8 calls (opps + forecasts)
+    // 1. Opportunities (active solicitations)
+    try {
+      const url = `https://tango.makegov.com/api/opportunities/?search=${encodeURIComponent(term)}&limit=20&ordering=-posted_date`;
+      const { status, data } = await httpsGet(url + `&api_key=${TANGO_KEY}`);
+      // Tango uses header auth
+      const resp = await new Promise((resolve, reject) => {
+        const u = new URL(`https://tango.makegov.com/api/opportunities/?search=${encodeURIComponent(term)}&limit=20&ordering=-posted_date`);
+        const req = https.request({
+          hostname: u.hostname, path: u.pathname + u.search, method: 'GET',
+          headers: { 'X-API-KEY': TANGO_KEY },
+          timeout: 15000
+        }, (res) => {
+          let raw = ''; res.on('data', d => raw += d);
+          res.on('end', () => { try { resolve({ status: res.statusCode, data: JSON.parse(raw) }); } catch(e) { reject(e); } });
+        });
+        req.on('error', reject); req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
+        req.end();
+      });
+
+      if (resp.status !== 200) { console.log(`  Tango opps "${term}": HTTP ${resp.status}`); continue; }
+      const opps = resp.data.results || [];
+      console.log(`  Tango opps "${term}": ${opps.length} results`);
+
+      for (const o of opps) {
+        const id = 'TANGO-' + (o.id || o.sam_id || Math.random());
+        if (seen.has(id)) continue; seen.add(id);
+        results.push({
+          id, source: 'TANGO',
+          title: o.title || o.subject || 'Tango Opportunity',
+          agency: o.agency_name || o.department || 'Unknown Agency',
+          subAgency: o.sub_agency || '', office: o.office || '',
+          solNum: o.solicitation_number || o.sam_id || '',
+          noticeId: String(o.id || ''),
+          noticeType: o.notice_type || o.base_type || 'Solicitation',
+          naicsCode: o.naics_code || '621111', naicsDesc: o.naics_description || '',
+          setAside: o.set_aside || '', setAsideCode: o.set_aside_code || '',
+          postedDate: o.posted_date || o.posted_at || null,
+          deadline: o.response_deadline || o.close_date || null,
+          archiveDate: null, active: true,
+          state: o.place_of_performance?.state || '', city: o.place_of_performance?.city || '',
+          desc: o.description || '',
+          uiLink: o.sam_url || o.url || `https://sam.gov/opp/${o.sam_id}/view`,
+          contact: o.contact_email || '', awardAmount: 0, recipient: '',
+          classCode: '', baseType: 'Solicitation',
+        });
+      }
+    } catch(e) { console.error(`  Tango opps error for "${term}":`, e.message); }
+
+    // 2. Procurement Forecasts — the unique data nobody else has
+    try {
+      const resp2 = await new Promise((resolve, reject) => {
+        const u = new URL(`https://tango.makegov.com/api/forecasts/?search=${encodeURIComponent(term)}&limit=20`);
+        const req = https.request({
+          hostname: u.hostname, path: u.pathname + u.search, method: 'GET',
+          headers: { 'X-API-KEY': TANGO_KEY },
+          timeout: 15000
+        }, (res) => {
+          let raw = ''; res.on('data', d => raw += d);
+          res.on('end', () => { try { resolve({ status: res.statusCode, data: JSON.parse(raw) }); } catch(e) { reject(e); } });
+        });
+        req.on('error', reject); req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
+        req.end();
+      });
+
+      if (resp2.status !== 200) { console.log(`  Tango forecasts "${term}": HTTP ${resp2.status}`); continue; }
+      const forecasts = resp2.data.results || [];
+      console.log(`  Tango forecasts "${term}": ${forecasts.length} results`);
+
+      for (const f of forecasts) {
+        const id = 'TANGO-FC-' + (f.id || Math.random());
+        if (seen.has(id)) continue; seen.add(id);
+        results.push({
+          id, source: 'TANGO',
+          title: '[FORECAST] ' + (f.title || f.description || 'Procurement Forecast'),
+          agency: f.agency_name || f.department || 'Unknown Agency',
+          subAgency: f.office || '', office: '',
+          solNum: f.requirement_id || '', noticeId: String(f.id || ''),
+          noticeType: 'Procurement Forecast',
+          naicsCode: f.naics_code || '621111', naicsDesc: '',
+          setAside: f.set_aside || '', setAsideCode: '',
+          postedDate: f.fiscal_year ? `${f.fiscal_year}-01-01` : null,
+          deadline: f.anticipated_award_date || f.estimated_solicitation_date || null,
+          archiveDate: null, active: true,
+          state: f.place_of_performance?.state || '', city: '',
+          desc: f.description || f.scope || '',
+          uiLink: f.url || 'https://tango.makegov.com',
+          contact: f.poc_email || '', awardAmount: f.estimated_value || 0, recipient: '',
+          classCode: '', baseType: 'Forecast',
+        });
+      }
+    } catch(e) { console.error(`  Tango forecasts error for "${term}":`, e.message); }
+  }
+
+  console.log(`Tango total: ${results.length}`);
+  return results;
+}
+
+// ── Federal Register API ──────────────────────────────────────────────────────
+// Free, no key. New OSHA rules, DoD mandates, HHS requirements.
+// An OSHA rule on audiometric testing = every employer needs a contractor.
+// This is the earliest possible BD signal — months before a procurement posts.
+
+async function fetchFederalRegister() {
+  const terms = ['occupational health', 'drug testing', 'medical surveillance', 'fit for duty', 'force health'];
+  const agencies = ['occupational-safety-and-health-administration', 'defense-department', 'health-and-human-services-department'];
+  const results = [];
+  const seen = new Set();
+  const today = new Date();
+  const from = new Date(); from.setDate(from.getDate() - 90);
+  const fmt = d => d.toISOString().split('T')[0];
+
+  for (const term of terms) {
+    const url = `https://www.federalregister.gov/api/v1/documents.json?per_page=20&order=newest&conditions[term]=${encodeURIComponent(term)}&conditions[publication_date][gte]=${fmt(from)}&conditions[type][]=RULE&conditions[type][]=PRORULE&conditions[type][]=NOTICE`;
+    console.log(`\nFetching Federal Register: "${term}"...`);
+    try {
+      const { status, data } = await httpsGet(url);
+      if (status !== 200) { console.log(`  FedReg "${term}": HTTP ${status}`); continue; }
+      const docs = data.results || [];
+      console.log(`  FedReg "${term}": ${docs.length} results`);
+      for (const d of docs) {
+        const id = 'FEDREG-' + (d.document_number || Math.random());
+        if (seen.has(id)) continue; seen.add(id);
+        results.push({
+          id, source: 'FEDREG',
+          title: '[REG ALERT] ' + (d.title || 'Federal Register Notice'),
+          agency: d.agencies?.map(a => a.name).join(', ') || 'Federal Agency',
+          subAgency: '', office: '',
+          solNum: d.document_number || '', noticeId: d.document_number || '',
+          noticeType: d.type === 'PRORULE' ? 'Proposed Rule' : d.type === 'RULE' ? 'Final Rule' : 'Federal Notice',
+          naicsCode: '621111', naicsDesc: 'Occupational Medicine',
+          setAside: '', setAsideCode: '',
+          postedDate: d.publication_date || null,
+          deadline: d.effective_on || d.comment_date || null,
+          archiveDate: null, active: true,
+          state: '', city: '',
+          desc: d.abstract || d.excerpts || '',
+          uiLink: d.html_url || d.pdf_url || 'https://www.federalregister.gov',
+          contact: '', awardAmount: 0, recipient: '',
+          classCode: '', baseType: 'Regulatory Notice',
+        });
+      }
+    } catch(e) { console.error(`  FedReg error for "${term}":`, e.message); }
+  }
+
+  console.log(`Federal Register total: ${results.length}`);
+  return results;
+}
+
+// ── State Scrapers ────────────────────────────────────────────────────────────
+// Server-side fetch of public procurement pages — no login, no ToS violation.
+// All these pages are publicly accessible and intended for vendor use.
+
+
+// Generic scraper helper
+async function scrapePage(url, label) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const mod = u.protocol === 'https:' ? https : require('http');
+    const req = mod.request({
+      hostname: u.hostname, path: u.pathname + u.search, method: 'GET',
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; OccuMed-RFP-Bot/1.0)', 'Accept': 'text/html,application/xhtml+xml' },
+      timeout: 20000
+    }, (res) => {
+      let raw = '';
+      // Follow redirects
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        resolve(scrapePage(res.headers.location, label));
+        return;
+      }
+      res.on('data', d => raw += d);
+      res.on('end', () => { console.log(`  ${label}: HTTP ${res.statusCode}, ${raw.length} bytes`); resolve(raw); });
+    });
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
+    req.end();
+  });
+}
+
+// Texas ESBD — public search, no login needed
+async function fetchTexasESBD(keywords) {
+  const results = [];
+  const seen = new Set();
+  const terms = keywords.length > 0 ? keywords : ['occupational health', 'drug testing', 'medical', 'health services'];
+
+  for (const term of terms.slice(0, 3)) {
+    try {
+      const url = `https://www.txsmartbuy.gov/esbd?keyword=${encodeURIComponent(term)}&status=Open`;
+      const html = await scrapePage(url, `TX ESBD "${term}"`);
+      const $ = cheerio.load(html);
+
+      // Parse solicitation rows from ESBD table
+      $('table tr').each((i, row) => {
+        if (i === 0) return; // skip header
+        const cells = $(row).find('td');
+        if (cells.length < 3) return;
+        const title = $(cells[0]).text().trim();
+        const agency = $(cells[1]).text().trim();
+        const deadline = $(cells[2]).text().trim();
+        const link = $(cells[0]).find('a').attr('href') || '';
+        if (!title || title.length < 5) return;
+
+        const id = 'TX-' + Buffer.from(title).toString('base64').slice(0, 20);
+        if (seen.has(id)) return; seen.add(id);
+
+        results.push({
+          id, source: 'STATE-TX',
+          title, agency: agency || 'Texas State Agency',
+          subAgency: '', office: '',
+          solNum: '', noticeId: id,
+          noticeType: 'State Solicitation',
+          naicsCode: '621111', naicsDesc: '',
+          setAside: '', setAsideCode: '',
+          postedDate: null,
+          deadline: deadline || null,
+          archiveDate: null, active: true,
+          state: 'TX', city: '',
+          desc: '',
+          uiLink: link.startsWith('http') ? link : `https://www.txsmartbuy.gov${link}`,
+          contact: '', awardAmount: 0, recipient: '',
+          classCode: '', baseType: 'State Bid',
+        });
+      });
+      console.log(`  TX ESBD "${term}": ${results.length} parsed so far`);
+    } catch(e) { console.error(`  TX ESBD error for "${term}":`, e.message); }
+  }
+  return results;
+}
+
+// Virginia eVA — public procurement portal
+async function fetchVirginiaEVA(keywords) {
+  const results = [];
+  const seen = new Set();
+  const terms = keywords.length > 0 ? keywords : ['occupational health', 'drug testing', 'medical services'];
+
+  for (const term of terms.slice(0, 3)) {
+    try {
+      const url = `https://eva.virginia.gov/pages/eva-search-main-page.html?searchType=opps&q=${encodeURIComponent(term)}&statusCodes=Open`;
+      const html = await scrapePage(url, `VA eVA "${term}"`);
+      const $ = cheerio.load(html);
+
+      $('.searchResultRow, .opportunity-row, tr.result-row').each((i, row) => {
+        const title = $(row).find('.title, .opp-title, td:first-child').first().text().trim();
+        const agency = $(row).find('.agency, .org-name, td:nth-child(2)').first().text().trim();
+        const deadline = $(row).find('.deadline, .close-date, td:nth-child(3)').first().text().trim();
+        const link = $(row).find('a').first().attr('href') || '';
+        if (!title || title.length < 5) return;
+
+        const id = 'VA-' + Buffer.from(title + agency).toString('base64').slice(0, 20);
+        if (seen.has(id)) return; seen.add(id);
+
+        results.push({
+          id, source: 'STATE-VA',
+          title, agency: agency || 'Virginia State Agency',
+          subAgency: '', office: '', solNum: '', noticeId: id,
+          noticeType: 'State Solicitation', naicsCode: '621111', naicsDesc: '',
+          setAside: '', setAsideCode: '',
+          postedDate: null, deadline: deadline || null,
+          archiveDate: null, active: true,
+          state: 'VA', city: '', desc: '',
+          uiLink: link.startsWith('http') ? link : `https://eva.virginia.gov${link}`,
+          contact: '', awardAmount: 0, recipient: '',
+          classCode: '', baseType: 'State Bid',
+        });
+      });
+    } catch(e) { console.error(`  VA eVA error for "${term}":`, e.message); }
+  }
+  console.log(`Virginia eVA total: ${results.length}`);
+  return results;
+}
+
+// Louisiana LaPAC — completely public, clean HTML table
+async function fetchLouisiana(keywords) {
+  const results = [];
+  const seen = new Set();
+  const terms = keywords.length > 0 ? keywords : ['health', 'medical', 'drug'];
+
+  for (const term of terms.slice(0, 3)) {
+    try {
+      const url = `https://wwwcfprd.doa.louisiana.gov/osp/lapac/bidList.cfm?search=${encodeURIComponent(term)}&status=Open`;
+      const html = await scrapePage(url, `LA LaPAC "${term}"`);
+      const $ = cheerio.load(html);
+
+      $('table tr').each((i, row) => {
+        if (i === 0) return;
+        const cells = $(row).find('td');
+        if (cells.length < 4) return;
+        const title = $(cells[1]).text().trim();
+        const agency = $(cells[2]).text().trim();
+        const deadline = $(cells[3]).text().trim();
+        const link = $(cells[1]).find('a').attr('href') || '';
+        if (!title || title.length < 5) return;
+
+        const id = 'LA-' + Buffer.from(title).toString('base64').slice(0, 20);
+        if (seen.has(id)) return; seen.add(id);
+
+        results.push({
+          id, source: 'STATE-LA',
+          title, agency: agency || 'Louisiana State Agency',
+          subAgency: '', office: '', solNum: '', noticeId: id,
+          noticeType: 'State Solicitation', naicsCode: '621111', naicsDesc: '',
+          setAside: '', setAsideCode: '',
+          postedDate: null, deadline: deadline || null,
+          archiveDate: null, active: true,
+          state: 'LA', city: '', desc: '',
+          uiLink: link.startsWith('http') ? link : `https://wwwcfprd.doa.louisiana.gov${link}`,
+          contact: '', awardAmount: 0, recipient: '',
+          classCode: '', baseType: 'State Bid',
+        });
+      });
+    } catch(e) { console.error(`  LA LaPAC error for "${term}":`, e.message); }
+  }
+  console.log(`Louisiana LaPAC total: ${results.length}`);
+  return results;
+}
+
+// Colorado OSC — public solicitations page
+async function fetchColorado(keywords) {
+  const results = [];
+  const seen = new Set();
+  try {
+    const url = 'https://osc.colorado.gov/spco/solicitations';
+    const html = await scrapePage(url, 'CO OSC');
+    const $ = cheerio.load(html);
+    const terms = keywords.length > 0 ? keywords.map(k => k.toLowerCase()) : ['health', 'medical', 'drug'];
+
+    $('table tr, .views-row, .solicitation-item').each((i, row) => {
+      const title = $(row).find('td:first-child, .title, h3').first().text().trim();
+      const agency = $(row).find('td:nth-child(2), .agency').first().text().trim();
+      const deadline = $(row).find('td:nth-child(3), .deadline').first().text().trim();
+      const link = $(row).find('a').first().attr('href') || '';
+      if (!title || title.length < 5) return;
+
+      // Apply relevance filter since we can't keyword-search the page
+      const titleLower = title.toLowerCase();
+      if (!terms.some(t => titleLower.includes(t))) return;
+
+      const id = 'CO-' + Buffer.from(title).toString('base64').slice(0, 20);
+      if (seen.has(id)) return; seen.add(id);
+
+      results.push({
+        id, source: 'STATE-CO',
+        title, agency: agency || 'Colorado State Agency',
+        subAgency: '', office: '', solNum: '', noticeId: id,
+        noticeType: 'State Solicitation', naicsCode: '621111', naicsDesc: '',
+        setAside: '', setAsideCode: '',
+        postedDate: null, deadline: deadline || null,
+        archiveDate: null, active: true,
+        state: 'CO', city: '', desc: '',
+        uiLink: link.startsWith('http') ? link : `https://osc.colorado.gov${link}`,
+        contact: '', awardAmount: 0, recipient: '',
+        classCode: '', baseType: 'State Bid',
+      });
+    });
+  } catch(e) { console.error('  Colorado OSC error:', e.message); }
+  console.log(`Colorado OSC total: ${results.length}`);
+  return results;
+}
+
+// Georgia DOAS — public procurement registry
+async function fetchGeorgia(keywords) {
+  const results = [];
+  const seen = new Set();
+  const terms = keywords.length > 0 ? keywords : ['health', 'medical', 'drug testing'];
+
+  for (const term of terms.slice(0, 3)) {
+    try {
+      const url = `https://ssl.doas.state.ga.us/PRSapp/PR_Search_Results.jsp?searchText=${encodeURIComponent(term)}&status=Open&agencyID=0`;
+      const html = await scrapePage(url, `GA DOAS "${term}"`);
+      const $ = cheerio.load(html);
+
+      $('table.results tr, tr.dataRow').each((i, row) => {
+        const title = $(row).find('td:nth-child(2), .title').first().text().trim();
+        const agency = $(row).find('td:nth-child(3), .agency').first().text().trim();
+        const deadline = $(row).find('td:nth-child(5), .deadline').first().text().trim();
+        const link = $(row).find('a').first().attr('href') || '';
+        if (!title || title.length < 5) return;
+
+        const id = 'GA-' + Buffer.from(title + agency).toString('base64').slice(0, 20);
+        if (seen.has(id)) return; seen.add(id);
+
+        results.push({
+          id, source: 'STATE-GA',
+          title, agency: agency || 'Georgia State Agency',
+          subAgency: '', office: '', solNum: '', noticeId: id,
+          noticeType: 'State Solicitation', naicsCode: '621111', naicsDesc: '',
+          setAside: '', setAsideCode: '',
+          postedDate: null, deadline: deadline || null,
+          archiveDate: null, active: true,
+          state: 'GA', city: '', desc: '',
+          uiLink: link.startsWith('http') ? link : `https://ssl.doas.state.ga.us${link}`,
+          contact: '', awardAmount: 0, recipient: '',
+          classCode: '', baseType: 'State Bid',
+        });
+      });
+    } catch(e) { console.error(`  GA DOAS error:`, e.message); }
+  }
+  console.log(`Georgia DOAS total: ${results.length}`);
+  return results;
+}
+
+// Mississippi — clean public procurement search
+async function fetchMississippi(keywords) {
+  const results = [];
+  const seen = new Set();
+  const terms = keywords.length > 0 ? keywords : ['health', 'medical', 'drug'];
+
+  for (const term of terms.slice(0, 3)) {
+    try {
+      const url = `https://www.ms.gov/dfa/contract_bid_search/Bid?searchText=${encodeURIComponent(term)}&status=Open&autoloadGrid=true`;
+      const html = await scrapePage(url, `MS "${term}"`);
+      const $ = cheerio.load(html);
+
+      $('table tr, .grid-row').each((i, row) => {
+        if (i === 0) return;
+        const cells = $(row).find('td');
+        if (cells.length < 3) return;
+        const title = $(cells[1]).text().trim();
+        const agency = $(cells[2]).text().trim();
+        const deadline = $(cells[3]).text().trim();
+        const link = $(cells[0]).find('a').attr('href') || '';
+        if (!title || title.length < 5) return;
+
+        const id = 'MS-' + Buffer.from(title).toString('base64').slice(0, 20);
+        if (seen.has(id)) return; seen.add(id);
+
+        results.push({
+          id, source: 'STATE-MS',
+          title, agency: agency || 'Mississippi State Agency',
+          subAgency: '', office: '', solNum: '', noticeId: id,
+          noticeType: 'State Solicitation', naicsCode: '621111', naicsDesc: '',
+          setAside: '', setAsideCode: '',
+          postedDate: null, deadline: deadline || null,
+          archiveDate: null, active: true,
+          state: 'MS', city: '', desc: '',
+          uiLink: link.startsWith('http') ? link : `https://www.ms.gov${link}`,
+          contact: '', awardAmount: 0, recipient: '',
+          classCode: '', baseType: 'State Bid',
+        });
+      });
+    } catch(e) { console.error(`  MS error:`, e.message); }
+  }
+  console.log(`Mississippi total: ${results.length}`);
+  return results;
+}
+
+// Master state scraper — runs all states and combines
+async function fetchStateBids(extraKeywords = []) {
+  console.log('\nFetching state portals...');
+  const [tx, va, la, co, ga, ms] = await Promise.allSettled([
+    fetchTexasESBD(extraKeywords),
+    fetchVirginiaEVA(extraKeywords),
+    fetchLouisiana(extraKeywords),
+    fetchColorado(extraKeywords),
+    fetchGeorgia(extraKeywords),
+    fetchMississippi(extraKeywords),
+  ]);
+  const get = r => r.status === 'fulfilled' ? r.value : [];
+  const all = [...get(tx), ...get(va), ...get(la), ...get(co), ...get(ga), ...get(ms)];
+  console.log(`State portals combined: ${all.length}`);
+  return all;
+}
+
 // ── Routes ────────────────────────────────────────────────────────────────────
 app.get('/api/status', (req, res) => res.json({
-  status: 'ok', version: '4.0.0', samKeyLoaded: !!SAM_KEY,
+  status: 'ok', version: '5.0.0', samKeyLoaded: !!SAM_KEY, tangoKeyLoaded: !!TANGO_KEY,
   sources: ['SAM.gov', 'USASpending (Contracts)', 'USASpending (IDV/IDIQ)', 'USASpending (Subawards)', 'USASpending (Grants)', 'SBIR.gov'],
   endpoints: ['/api/sam', '/api/usaspending', '/api/idv', '/api/subawards', '/api/grants', '/api/sbir', '/api/opportunities']
 }));
 
-app.get('/api/sam',         async (req, res) => { try { res.json({ success:true, data: await fetchSAM() }); }         catch(e) { res.status(500).json({ success:false, error:e.message, data:[] }); } });
-app.get('/api/usaspending', async (req, res) => { try { res.json({ success:true, data: await fetchUSASpending(parseInt(req.query.days)||90) }); } catch(e) { res.status(500).json({ success:false, error:e.message, data:[] }); } });
-app.get('/api/idv',         async (req, res) => { try { res.json({ success:true, data: await fetchIDV(parseInt(req.query.days)||180) }); }       catch(e) { res.status(500).json({ success:false, error:e.message, data:[] }); } });
-app.get('/api/subawards',   async (req, res) => { try { res.json({ success:true, data: await fetchSubawards(parseInt(req.query.days)||90) }); }   catch(e) { res.status(500).json({ success:false, error:e.message, data:[] }); } });
-app.get('/api/grants',      async (req, res) => { try { res.json({ success:true, data: await fetchGrants(parseInt(req.query.days)||90) }); }      catch(e) { res.status(500).json({ success:false, error:e.message, data:[] }); } });
-app.get('/api/sbir',        async (req, res) => { try { res.json({ success:true, data: await fetchSBIR() }); }                                    catch(e) { res.status(500).json({ success:false, error:e.message, data:[] }); } });
+// Parse custom keywords from ?keywords=term1,term2,...
+function parseKeywords(req) {
+  const raw = req.query.keywords || '';
+  return raw ? raw.split(',').map(k => k.trim()).filter(Boolean) : [];
+}
+
+app.get('/api/tango',      async (req, res) => { try { res.json({ success:true, data: await fetchTango() }); }                                               catch(e) { res.status(500).json({ success:false, error:e.message, data:[] }); } });
+app.get('/api/fedreg',     async (req, res) => { try { res.json({ success:true, data: await fetchFederalRegister() }); }                                        catch(e) { res.status(500).json({ success:false, error:e.message, data:[] }); } });
+app.get('/api/states',     async (req, res) => { try { res.json({ success:true, data: await fetchStateBids(parseKeywords(req)) }); }                            catch(e) { res.status(500).json({ success:false, error:e.message, data:[] }); } });
+app.get('/api/sam',         async (req, res) => { try { res.json({ success:true, data: await fetchSAM() }); }                                                                            catch(e) { res.status(500).json({ success:false, error:e.message, data:[] }); } });
+app.get('/api/usaspending', async (req, res) => { try { res.json({ success:true, data: await fetchUSASpending(parseInt(req.query.days)||90, parseKeywords(req)) }); }                   catch(e) { res.status(500).json({ success:false, error:e.message, data:[] }); } });
+app.get('/api/idv',         async (req, res) => { try { res.json({ success:true, data: await fetchIDV(parseInt(req.query.days)||180, parseKeywords(req)) }); }                          catch(e) { res.status(500).json({ success:false, error:e.message, data:[] }); } });
+app.get('/api/subawards',   async (req, res) => { try { res.json({ success:true, data: await fetchSubawards(parseInt(req.query.days)||90, parseKeywords(req)) }); }                     catch(e) { res.status(500).json({ success:false, error:e.message, data:[] }); } });
+app.get('/api/grants',      async (req, res) => { try { res.json({ success:true, data: await fetchGrants(parseInt(req.query.days)||90, parseKeywords(req)) }); }                        catch(e) { res.status(500).json({ success:false, error:e.message, data:[] }); } });
+app.get('/api/sbir',        async (req, res) => { try { res.json({ success:true, data: await fetchSBIR() }); }                                                                           catch(e) { res.status(500).json({ success:false, error:e.message, data:[] }); } });
 
 app.get('/api/opportunities', async (req, res) => {
   const days = parseInt(req.query.days) || 90;
-  const [samR, usaR, idvR, subR, grantR, sbirR] = await Promise.allSettled([
-    fetchSAM(), fetchUSASpending(days), fetchIDV(days), fetchSubawards(days), fetchGrants(days), fetchSBIR()
+  const kw = parseKeywords(req);
+  const [samR, usaR, idvR, subR, grantR, sbirR, tangoR, fedregR, statesR] = await Promise.allSettled([
+    fetchSAM(), fetchUSASpending(days, kw), fetchIDV(days, kw), fetchSubawards(days, kw),
+    fetchGrants(days, kw), fetchSBIR(), fetchTango(), fetchFederalRegister(), fetchStateBids(kw)
   ]);
   const get = r => r.status === 'fulfilled' ? r.value : [];
   const err = (lbl, r) => r.status === 'rejected' ? [`${lbl}: ${r.reason?.message}`] : [];
-  const all = [...get(samR),...get(usaR),...get(idvR),...get(subR),...get(grantR),...get(sbirR)];
+  const all = [...get(samR),...get(usaR),...get(idvR),...get(subR),...get(grantR),...get(sbirR),...get(tangoR),...get(fedregR),...get(statesR)];
   res.json({
     success: true, total: all.length,
     samCount: get(samR).length, usaCount: get(usaR).length,
     idvCount: get(idvR).length, subCount: get(subR).length,
     grantsCount: get(grantR).length, sbirCount: get(sbirR).length,
-    errors: [...err('SAM',samR),...err('USASpending',usaR),...err('IDV',idvR),...err('Subawards',subR),...err('Grants',grantR),...err('SBIR',sbirR)],
+    tangoCount: get(tangoR).length, fedregCount: get(fedregR).length,
+    statesCount: get(statesR).length,
+    errors: [...err('SAM',samR),...err('USASpending',usaR),...err('IDV',idvR),...err('Subawards',subR),...err('Grants',grantR),...err('SBIR',sbirR),...err('Tango',tangoR),...err('FedReg',fedregR),...err('States',statesR)],
     data: all
   });
 });
 
+// ── Keep-alive ping (prevents Render free tier from sleeping) ────────────────
+const RENDER_URL = process.env.RENDER_EXTERNAL_URL || '';
+if (RENDER_URL) {
+  setInterval(() => {
+    https.get(`${RENDER_URL}/api/status`, (res) => {
+      console.log(`Keep-alive ping: ${res.statusCode}`);
+    }).on('error', (e) => {
+      console.log(`Keep-alive ping failed: ${e.message}`);
+    });
+  }, 10 * 60 * 1000); // every 10 minutes
+}
+
 app.listen(PORT, () => {
   console.log(`\nOccu-Med Backend v4.0 running on port ${PORT}`);
   console.log(`SAM API key: ${SAM_KEY ? SAM_KEY.slice(0,12)+'...' : 'NOT SET'}`);
-  console.log(`Sources: SAM | Contracts | IDV/IDIQ | Subawards | Grants | SBIR\n`);
+  console.log(`Sources: SAM | Contracts | IDV | Subawards | Grants | SBIR | Tango | FedReg | TX | VA | LA | CO | GA | MS\n`);
 });
