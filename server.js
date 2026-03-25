@@ -443,7 +443,6 @@ async function fetchTango() {
   console.log(`Tango total: ${results.length}`);
   return results;
 }
-}
 
 // ── Federal Register API ──────────────────────────────────────────────────────
 // Free, no key. New OSHA rules, DoD mandates, HHS requirements.
