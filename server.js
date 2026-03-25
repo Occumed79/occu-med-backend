@@ -28,6 +28,26 @@ function httpsGet(url) {
   });
 }
 
+function httpsGetH(url, headers = {}) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const req = https.request({
+      hostname: u.hostname, path: u.pathname + u.search, method: 'GET',
+      headers: { 'Accept': 'application/json', ...headers },
+      timeout: 20000
+    }, (res) => {
+      let raw = ''; res.on('data', d => raw += d);
+      res.on('end', () => {
+        try { resolve({ status: res.statusCode, data: JSON.parse(raw) }); }
+        catch(e) { reject(new Error(`JSON parse failed (${res.statusCode}): ${raw.slice(0,200)}`)); }
+      });
+    });
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
+    req.end();
+  });
+}
+
 function httpsPost(url, bodyStr) {
   return new Promise((resolve, reject) => {
     const buf = Buffer.from(bodyStr);
@@ -351,79 +371,50 @@ const OCC_TERMS = [
 ];
 
 async function fetchTango() {
-  if (!TANGO_KEY) { console.log('Tango: no API key set (TANGO_API_KEY)'); return []; }
+  if (!TANGO_KEY) { console.log('Tango: no TANGO_API_KEY set'); return []; }
   const seen = new Set();
   const results = [];
+  const headers = { 'X-API-KEY': TANGO_KEY };
 
-  for (const term of OCC_TERMS.slice(0, 4)) { // 4 terms = 8 calls (opps + forecasts)
-    // 1. Opportunities (active solicitations)
+  for (const term of OCC_TERMS.slice(0, 4)) {
+    // Opportunities
     try {
-      const url = `https://tango.makegov.com/api/opportunities/?search=${encodeURIComponent(term)}&limit=20&ordering=-posted_date`;
-      const { status, data } = await httpsGet(url + `&api_key=${TANGO_KEY}`);
-      // Tango uses header auth
-      const resp = await new Promise((resolve, reject) => {
-        const u = new URL(`https://tango.makegov.com/api/opportunities/?search=${encodeURIComponent(term)}&limit=20&ordering=-posted_date`);
-        const req = https.request({
-          hostname: u.hostname, path: u.pathname + u.search, method: 'GET',
-          headers: { 'X-API-KEY': TANGO_KEY },
-          timeout: 15000
-        }, (res) => {
-          let raw = ''; res.on('data', d => raw += d);
-          res.on('end', () => { try { resolve({ status: res.statusCode, data: JSON.parse(raw) }); } catch(e) { reject(e); } });
-        });
-        req.on('error', reject); req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
-        req.end();
-      });
-
-      if (resp.status !== 200) { console.log(`  Tango opps "${term}": HTTP ${resp.status}`); continue; }
-      const opps = resp.data.results || [];
-      console.log(`  Tango opps "${term}": ${opps.length} results`);
-
+      const url = `https://tango.makegov.com/api/opportunities/?search=${encodeURIComponent(term)}&limit=20&ordering=-response_deadline`;
+      const { status, data } = await httpsGetH(url, headers);
+      const opps = data.results || [];
+      console.log(`  Tango opps "${term}": HTTP ${status}, ${opps.length} results`);
       for (const o of opps) {
-        const id = 'TANGO-' + (o.id || o.sam_id || Math.random());
+        const id = 'TANGO-' + (o.id || Math.random());
         if (seen.has(id)) continue; seen.add(id);
         results.push({
           id, source: 'TANGO',
           title: o.title || o.subject || 'Tango Opportunity',
           agency: o.agency_name || o.department || 'Unknown Agency',
-          subAgency: o.sub_agency || '', office: o.office || '',
+          subAgency: '', office: '',
           solNum: o.solicitation_number || o.sam_id || '',
           noticeId: String(o.id || ''),
-          noticeType: o.notice_type || o.base_type || 'Solicitation',
+          noticeType: o.notice_type || 'Solicitation',
           naicsCode: o.naics_code || '621111', naicsDesc: o.naics_description || '',
-          setAside: o.set_aside || '', setAsideCode: o.set_aside_code || '',
-          postedDate: o.posted_date || o.posted_at || null,
+          setAside: o.set_aside || '', setAsideCode: '',
+          postedDate: o.posted_date || null,
           deadline: o.response_deadline || o.close_date || null,
           archiveDate: null, active: true,
-          state: o.place_of_performance?.state || '', city: o.place_of_performance?.city || '',
+          state: o.place_of_performance?.state?.code || o.place_of_performance?.state || '',
+          city: o.place_of_performance?.city?.name || '',
           desc: o.description || '',
-          uiLink: o.sam_url || o.url || `https://sam.gov/opp/${o.sam_id}/view`,
-          contact: o.contact_email || '', awardAmount: 0, recipient: '',
+          uiLink: o.sam_url || `https://sam.gov/opp/${o.sam_id}/view`,
+          contact: '', awardAmount: 0, recipient: '',
           classCode: '', baseType: 'Solicitation',
         });
       }
-    } catch(e) { console.error(`  Tango opps error for "${term}":`, e.message); }
+    } catch(e) { console.error(`  Tango opps error "${term}":`, e.message); }
 
-    // 2. Procurement Forecasts — the unique data nobody else has
+    // Procurement Forecasts
     try {
-      const resp2 = await new Promise((resolve, reject) => {
-        const u = new URL(`https://tango.makegov.com/api/forecasts/?search=${encodeURIComponent(term)}&limit=20`);
-        const req = https.request({
-          hostname: u.hostname, path: u.pathname + u.search, method: 'GET',
-          headers: { 'X-API-KEY': TANGO_KEY },
-          timeout: 15000
-        }, (res) => {
-          let raw = ''; res.on('data', d => raw += d);
-          res.on('end', () => { try { resolve({ status: res.statusCode, data: JSON.parse(raw) }); } catch(e) { reject(e); } });
-        });
-        req.on('error', reject); req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
-        req.end();
-      });
-
-      if (resp2.status !== 200) { console.log(`  Tango forecasts "${term}": HTTP ${resp2.status}`); continue; }
-      const forecasts = resp2.data.results || [];
-      console.log(`  Tango forecasts "${term}": ${forecasts.length} results`);
-
+      const url2 = `https://tango.makegov.com/api/forecasts/?search=${encodeURIComponent(term)}&limit=20`;
+      const { status: s2, data: d2 } = await httpsGetH(url2, headers);
+      const forecasts = d2.results || [];
+      console.log(`  Tango forecasts "${term}": HTTP ${s2}, ${forecasts.length} results`);
       for (const f of forecasts) {
         const id = 'TANGO-FC-' + (f.id || Math.random());
         if (seen.has(id)) continue; seen.add(id);
@@ -431,7 +422,7 @@ async function fetchTango() {
           id, source: 'TANGO',
           title: '[FORECAST] ' + (f.title || f.description || 'Procurement Forecast'),
           agency: f.agency_name || f.department || 'Unknown Agency',
-          subAgency: f.office || '', office: '',
+          subAgency: '', office: '',
           solNum: f.requirement_id || '', noticeId: String(f.id || ''),
           noticeType: 'Procurement Forecast',
           naicsCode: f.naics_code || '621111', naicsDesc: '',
@@ -439,18 +430,19 @@ async function fetchTango() {
           postedDate: f.fiscal_year ? `${f.fiscal_year}-01-01` : null,
           deadline: f.anticipated_award_date || f.estimated_solicitation_date || null,
           archiveDate: null, active: true,
-          state: f.place_of_performance?.state || '', city: '',
+          state: '', city: '',
           desc: f.description || f.scope || '',
           uiLink: f.url || 'https://tango.makegov.com',
-          contact: f.poc_email || '', awardAmount: f.estimated_value || 0, recipient: '',
+          contact: '', awardAmount: f.estimated_value || 0, recipient: '',
           classCode: '', baseType: 'Forecast',
         });
       }
-    } catch(e) { console.error(`  Tango forecasts error for "${term}":`, e.message); }
+    } catch(e) { console.error(`  Tango forecasts error "${term}":`, e.message); }
   }
 
   console.log(`Tango total: ${results.length}`);
   return results;
+}
 }
 
 // ── Federal Register API ──────────────────────────────────────────────────────
@@ -468,7 +460,7 @@ async function fetchFederalRegister() {
   const fmt = d => d.toISOString().split('T')[0];
 
   for (const term of terms) {
-    const url = `https://www.federalregister.gov/api/v1/documents.json?per_page=20&order=newest&conditions[term]=${encodeURIComponent(term)}&conditions[publication_date][gte]=${fmt(from)}&conditions[type][]=RULE&conditions[type][]=PRORULE&conditions[type][]=NOTICE`;
+    const url = `https://www.federalregister.gov/api/v1/documents.json?per_page=20&order=newest&conditions%5Bterm%5D=${encodeURIComponent(term)}&conditions%5Bpublication_date%5D%5Bgte%5D=${fmt(from)}&conditions%5Btype%5D%5B%5D=RULE&conditions%5Btype%5D%5B%5D=PRORULE&conditions%5Btype%5D%5B%5D=NOTICE`;
     console.log(`\nFetching Federal Register: "${term}"...`);
     try {
       const { status, data } = await httpsGet(url);
