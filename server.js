@@ -270,7 +270,7 @@ async function fetchSubawards(daysBack = 90, extraKeywords = []) {
         'Awarding Agency', 'Sub-Award Description',
         'Place of Performance State Code'
       ],
-      sort: 'Sub-Award ID', order: 'desc', limit: 50, page: 1
+      limit: 50, page: 1
     });
 
     try {
@@ -459,10 +459,28 @@ async function fetchFederalRegister() {
   const fmt = d => d.toISOString().split('T')[0];
 
   for (const term of terms) {
-    const url = `https://www.federalregister.gov/api/v1/documents.json?per_page=20&order=newest&fields[]=title&fields[]=document_number&fields[]=publication_date&fields[]=type&fields[]=abstract&fields[]=html_url&fields[]=agencies&fields[]=effective_on&fields[]=comment_date&conditions[term]=${encodeURIComponent(term)}&conditions[publication_date][gte]=${fmt(from)}&conditions[type][]=RULE&conditions[type][]=PRORULE&conditions[type][]=NOTICE`;
+    // Build URL with properly encoded brackets for Node https
+    const frParams = new URLSearchParams();
+    frParams.append('per_page', '20');
+    frParams.append('order', 'newest');
+    frParams.append('fields[]', 'title');
+    frParams.append('fields[]', 'document_number');
+    frParams.append('fields[]', 'publication_date');
+    frParams.append('fields[]', 'type');
+    frParams.append('fields[]', 'abstract');
+    frParams.append('fields[]', 'html_url');
+    frParams.append('fields[]', 'agencies');
+    frParams.append('fields[]', 'effective_on');
+    frParams.append('fields[]', 'comment_date');
+    frParams.append('conditions[term]', term);
+    frParams.append('conditions[publication_date][gte]', fmt(from));
+    frParams.append('conditions[type][]', 'RULE');
+    frParams.append('conditions[type][]', 'PRORULE');
+    frParams.append('conditions[type][]', 'NOTICE');
+    const url = `https://www.federalregister.gov/api/v1/documents.json?${frParams.toString()}`;
     console.log(`\nFetching Federal Register: "${term}"...`);
     try {
-      const { status, data } = await httpsGet(url);
+      const { status, data } = await httpsGetH(url);
       if (status !== 200) { console.log(`  FedReg "${term}": HTTP ${status}`); continue; }
       const docs = data.results || [];
       console.log(`  FedReg "${term}": ${docs.length} results`);
@@ -532,6 +550,7 @@ async function fetchTexasESBD(keywords) {
   const terms = keywords.length > 0 ? keywords : ['occupational health', 'drug testing', 'medical', 'health services'];
 
   for (const term of terms.slice(0, 3)) {
+    let prevCount = results.length;
     try {
       const url = `https://www.txsmartbuy.gov/esbd?keyword=${encodeURIComponent(term)}&status=Open`;
       const html = await scrapePage(url, `TX ESBD "${term}"`);
@@ -539,8 +558,10 @@ async function fetchTexasESBD(keywords) {
 
       // TX ESBD uses data-* attributes or specific class names
       // Try multiple selector strategies
-      const rows = $('tr[class*="row"], tbody tr, .esbd-row, table.esbd-table tr').toArray();
-      const allRows = rows.length > 0 ? rows : $('table tr').toArray();
+      // TX ESBD structure: look for rows with solicitation links
+      const rows1 = $('table.ESBD_Results tr, table tr, .solicitation-row').toArray();
+      const rows2 = $('[id*="solicitationId"], a[href*="solicitationId"], a[href*="ESBD"]').closest('tr').toArray();
+      const allRows = rows2.length > 0 ? rows2 : (rows1.length > 1 ? rows1 : $('tr').toArray());
       
       allRows.forEach((row, i) => {
         if (i === 0) return;
@@ -577,7 +598,9 @@ async function fetchTexasESBD(keywords) {
           classCode: '', baseType: 'State Bid',
         });
       });
-      console.log(`  TX ESBD "${term}": ${results.length} parsed so far`);
+      const parsedCount = results.length - prevCount;
+      console.log(`  TX ESBD "${term}": ${parsedCount} parsed (${allRows.length} rows found in HTML)`);
+      prevCount = results.length;
     } catch(e) { console.error(`  TX ESBD error for "${term}":`, e.message); }
   }
   return results;
@@ -591,7 +614,8 @@ async function fetchVirginiaEVA(keywords) {
 
   for (const term of terms.slice(0, 3)) {
     try {
-      const url = `https://eva.virginia.gov/sites/eva.virginia.gov/files/public-api/opportunities?keyword=${encodeURIComponent(term)}&status=open&limit=50`;
+      // eVA public search — scrape the vendor opportunity search page
+      const url = `https://eva.virginia.gov/pages/vendor-bid-search.html?searchString=${encodeURIComponent(term)}&recordsPerPage=50&status=Open`;
       const html = await scrapePage(url, `VA eVA "${term}"`);
       const $ = cheerio.load(html);
 
@@ -633,7 +657,7 @@ async function fetchLouisiana(keywords) {
 
   for (const term of terms.slice(0, 3)) {
     try {
-      const url = `https://wwwcfprd.doa.louisiana.gov/osp/lapac/bidList.cfm?keyWord=${encodeURIComponent(term)}&bidCategory=&statusCode=O&bidTypeCode=&vendorID=`;
+      const url = `https://wwwcfprd.doa.louisiana.gov/osp/lapac/bidList.cfm?keyWord=${encodeURIComponent(term)}&statusCode=O`;
       const html = await scrapePage(url, `LA LaPAC "${term}"`);
       const $ = cheerio.load(html);
 
@@ -726,7 +750,7 @@ async function fetchGeorgia(keywords) {
 
   for (const term of terms.slice(0, 3)) {
     try {
-      const url = `https://ssl.doas.state.ga.us/PRSapp/PR_Search_Results.jsp?searchText=${encodeURIComponent(term)}&status=A&agencyID=0&buyCategoryID=0&searchBtn=Search`;
+      const url = `https://ssl.doas.state.ga.us/PRSapp/PR_Search_Results.jsp?searchText=${encodeURIComponent(term)}&statusCode=A&agencyID=0`;
       const html = await scrapePage(url, `GA DOAS "${term}"`);
       const $ = cheerio.load(html);
 
@@ -768,7 +792,7 @@ async function fetchMississippi(keywords) {
 
   for (const term of terms.slice(0, 3)) {
     try {
-      const url = `https://www.ms.gov/dfa/contract_bid_search/Bid?searchText=${encodeURIComponent(term)}&status=Open&autoloadGrid=true`;
+      const url = `https://www.ms.gov/dfa/contract_bid_search/Bid/BidSearch?keyword=${encodeURIComponent(term)}&status=0`;
       const html = await scrapePage(url, `MS "${term}"`);
       const $ = cheerio.load(html);
 
