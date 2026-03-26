@@ -1,65 +1,55 @@
-// server.js
-
-const express = require('express');
 const axios = require('axios');
-const logger = require('./logger'); // Assume a custom logger is set up
 
-const app = express();
-const PORT = process.env.PORT || 3000;
+const MAX_RETRIES = 3;
+const RETRY_DELAY = 1000; // milliseconds
+const TIMEOUT = 25000; // milliseconds
 
-// Middleware for logging
-app.use((req, res, next) => {
-    logger.info(`Request: ${req.method} ${req.url}`);
-    next();
-});
+const endpoints = {
+    sam: 'https://api.sam.gov',
+    usaspending: 'https://api.usaspending.gov',
+    idv: 'https://api.usaspending.gov/api/v2/idv',
+    subawards: 'https://api.usaspending.gov/api/v2/subawards',
+    grants: 'https://api.usaspending.gov/api/v2/grants',
+    sbir: 'https://api.usaspending.gov/api/v2/sbir',
+    tango: 'https://api.tango.me',
+    federalRegister: 'https://www.federalregister.gov/api/v1/documents',
+    states: 'https://api.example.com/states',
+    opportunities: '/api/opportunities'
+};
 
-// Retry mechanism for API calls
-async function retry(fn, retries = 3) {
-    for (let i = 0; i < retries; i++) {
+async function fetchWithRetry(url, options, retries = MAX_RETRIES) {
+    for (let attempt = 0; attempt < retries; attempt++) {
         try {
-            const result = await fn();
-            return result;
+            const response = await axios.get(url, {...options, timeout: TIMEOUT});
+            return response.data;
         } catch (error) {
-            logger.error(`Attempt ${i + 1} failed: ${error.message}`);
-            if (i === retries - 1) throw error;
+            if (error.response && error.response.status === 429) {
+                console.warn(`Rate limit exceeded. Attempt ${attempt + 1} of ${retries}.`);
+                await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
+            } else {
+                console.error(`Error fetching ${url}:`, error);
+                break;
+            }
         }
     }
+    throw new Error(`Failed to fetch ${url} after ${MAX_RETRIES} attempts.`);
 }
 
-// Function to authenticate with Tango
-async function tangoAuthenticate() {
+async function fetchData() {
     try {
-        const response = await retry(() => axios.post('https://api.tango.com/auth', { /* credentials */ }));
-        return response.data;
+        const samData = await fetchWithRetry(endpoints.sam);
+        // Handle SAM data
+
+        const usaspendingData = await fetchWithRetry(endpoints.usaspending);
+        // Handle USASpending data
+
+        // Add additional fetching logic for IDV, Subawards, Grants, SBIR, Tango, Federal Register, and States endpoints
+        // Include flexible selectors and sorting for Subawards with Sub-Award Date field
+
+        console.log('Fetch completed successfully.');
     } catch (error) {
-        logger.error(`Tango authentication failed: ${error.message}`);
-        throw error;
+        console.error('An error occurred while fetching data:', error);
     }
 }
 
-// Fetch subawards
-async function fetchSubawards() {
-    try {
-        const response = await retry(() => axios.get('https://api.example.com/subawards'));
-        return response.data;
-    } catch (error) {
-        logger.error(`Failed to fetch subawards: ${error.message}`);
-        throw error;
-    }
-}
-
-// State scrapers implementation
-// Assuming improvements are in the selector logic
-async function fetchStateData(state) {
-    try {
-        const response = await retry(() => axios.get(`https://api.example.com/states/${state}`));
-        return response.data;
-    } catch (error) {
-        logger.error(`Fetching data for state ${state} failed: ${error.message}`);
-        throw error;
-    }
-}
-
-app.listen(PORT, () => {
-    logger.info(`Server running on port ${PORT}`);
-});
+fetchData();
