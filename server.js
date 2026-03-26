@@ -270,7 +270,7 @@ async function fetchSubawards(daysBack = 90, extraKeywords = []) {
         'Awarding Agency', 'Sub-Award Description',
         'Place of Performance State Code'
       ],
-      sort: 'Award ID', order: 'desc', limit: 50, page: 1
+      sort: 'Sub-Award ID', order: 'desc', limit: 50, page: 1
     });
 
     try {
@@ -459,8 +459,7 @@ async function fetchFederalRegister() {
   const fmt = d => d.toISOString().split('T')[0];
 
   for (const term of terms) {
-    const fields = 'fields[]=title&fields[]=document_number&fields[]=publication_date&fields[]=type&fields[]=abstract&fields[]=html_url&fields[]=agencies&fields[]=effective_on&fields[]=comment_date&fields[]=excerpts';
-    const url = `https://www.federalregister.gov/api/v1/documents.json?per_page=20&order=newest&${fields}&conditions%5Bterm%5D=${encodeURIComponent(term)}&conditions%5Bpublication_date%5D%5Bgte%5D=${fmt(from)}&conditions%5Btype%5D%5B%5D=RULE&conditions%5Btype%5D%5B%5D=PRORULE&conditions%5Btype%5D%5B%5D=NOTICE`;
+    const url = `https://www.federalregister.gov/api/v1/documents.json?per_page=20&order=newest&fields[]=title&fields[]=document_number&fields[]=publication_date&fields[]=type&fields[]=abstract&fields[]=html_url&fields[]=agencies&fields[]=effective_on&fields[]=comment_date&conditions[term]=${encodeURIComponent(term)}&conditions[publication_date][gte]=${fmt(from)}&conditions[type][]=RULE&conditions[type][]=PRORULE&conditions[type][]=NOTICE`;
     console.log(`\nFetching Federal Register: "${term}"...`);
     try {
       const { status, data } = await httpsGet(url);
@@ -538,16 +537,24 @@ async function fetchTexasESBD(keywords) {
       const html = await scrapePage(url, `TX ESBD "${term}"`);
       const $ = cheerio.load(html);
 
-      // Parse solicitation rows from ESBD table
-      $('table tr').each((i, row) => {
-        if (i === 0) return; // skip header
+      // TX ESBD uses data-* attributes or specific class names
+      // Try multiple selector strategies
+      const rows = $('tr[class*="row"], tbody tr, .esbd-row, table.esbd-table tr').toArray();
+      const allRows = rows.length > 0 ? rows : $('table tr').toArray();
+      
+      allRows.forEach((row, i) => {
+        if (i === 0) return;
         const cells = $(row).find('td');
-        if (cells.length < 3) return;
-        const title = $(cells[0]).text().trim();
-        const agency = $(cells[1]).text().trim();
-        const deadline = $(cells[2]).text().trim();
-        const link = $(cells[0]).find('a').attr('href') || '';
-        if (!title || title.length < 5) return;
+        if (cells.length < 2) return;
+        
+        // Try to find title via anchor tag first
+        const anchor = $(row).find('a').first();
+        const title = anchor.text().trim() || $(cells[0]).text().trim();
+        const link = anchor.attr('href') || '';
+        const agency = $(cells[cells.length > 3 ? 2 : 1]).text().trim();
+        const deadline = $(cells[cells.length - 1]).text().trim();
+        
+        if (!title || title.length < 5 || title.toLowerCase().includes('solicitation')) return;
 
         const id = 'TX-' + Buffer.from(title).toString('base64').slice(0, 20);
         if (seen.has(id)) return; seen.add(id);
@@ -565,7 +572,7 @@ async function fetchTexasESBD(keywords) {
           archiveDate: null, active: true,
           state: 'TX', city: '',
           desc: '',
-          uiLink: link.startsWith('http') ? link : `https://www.txsmartbuy.gov${link}`,
+          uiLink: link.startsWith('http') ? link : link ? `https://www.txsmartbuy.gov${link}` : `https://www.txsmartbuy.gov/esbd?keyword=${encodeURIComponent(term)}`,
           contact: '', awardAmount: 0, recipient: '',
           classCode: '', baseType: 'State Bid',
         });
@@ -584,7 +591,7 @@ async function fetchVirginiaEVA(keywords) {
 
   for (const term of terms.slice(0, 3)) {
     try {
-      const url = `https://eva.virginia.gov/pages/eva-search-main-page.html?searchType=opps&q=${encodeURIComponent(term)}&statusCodes=Open`;
+      const url = `https://eva.virginia.gov/sites/eva.virginia.gov/files/public-api/opportunities?keyword=${encodeURIComponent(term)}&status=open&limit=50`;
       const html = await scrapePage(url, `VA eVA "${term}"`);
       const $ = cheerio.load(html);
 
@@ -626,7 +633,7 @@ async function fetchLouisiana(keywords) {
 
   for (const term of terms.slice(0, 3)) {
     try {
-      const url = `https://wwwcfprd.doa.louisiana.gov/osp/lapac/bidList.cfm?search=${encodeURIComponent(term)}&status=Open`;
+      const url = `https://wwwcfprd.doa.louisiana.gov/osp/lapac/bidList.cfm?keyWord=${encodeURIComponent(term)}&bidCategory=&statusCode=O&bidTypeCode=&vendorID=`;
       const html = await scrapePage(url, `LA LaPAC "${term}"`);
       const $ = cheerio.load(html);
 
@@ -673,10 +680,15 @@ async function fetchColorado(keywords) {
     const $ = cheerio.load(html);
     const terms = keywords.length > 0 ? keywords.map(k => k.toLowerCase()) : ['health', 'medical', 'drug'];
 
-    $('table tr, .views-row, .solicitation-item').each((i, row) => {
-      const title = $(row).find('td:first-child, .title, h3').first().text().trim();
-      const agency = $(row).find('td:nth-child(2), .agency').first().text().trim();
-      const deadline = $(row).find('td:nth-child(3), .deadline').first().text().trim();
+    // Try multiple selectors — Colorado OSC uses Drupal views
+    const allCoRows = $('table tbody tr, .views-row, tr.odd, tr.even').toArray();
+    const coRows = allCoRows.length > 0 ? allCoRows : $('table tr').toArray();
+    coRows.forEach((row, i) => {
+      if (i === 0 && allCoRows.length === 0) return; // skip header only if raw table
+      const title = $(row).find('a, td:first-child a, .views-field-title a, h3 a').first().text().trim()
+        || $(row).find('td:first-child, .title').first().text().trim();
+      const agency = $(row).find('td:nth-child(2), .agency, .views-field-field-agency').first().text().trim();
+      const deadline = $(row).find('td:last-child, td:nth-child(4), .views-field-field-deadline').first().text().trim();
       const link = $(row).find('a').first().attr('href') || '';
       if (!title || title.length < 5) return;
 
@@ -714,7 +726,7 @@ async function fetchGeorgia(keywords) {
 
   for (const term of terms.slice(0, 3)) {
     try {
-      const url = `https://ssl.doas.state.ga.us/PRSapp/PR_Search_Results.jsp?searchText=${encodeURIComponent(term)}&status=Open&agencyID=0`;
+      const url = `https://ssl.doas.state.ga.us/PRSapp/PR_Search_Results.jsp?searchText=${encodeURIComponent(term)}&status=A&agencyID=0&buyCategoryID=0&searchBtn=Search`;
       const html = await scrapePage(url, `GA DOAS "${term}"`);
       const $ = cheerio.load(html);
 
@@ -760,14 +772,15 @@ async function fetchMississippi(keywords) {
       const html = await scrapePage(url, `MS "${term}"`);
       const $ = cheerio.load(html);
 
-      $('table tr, .grid-row').each((i, row) => {
+      $('table tr').each((i, row) => {
         if (i === 0) return;
         const cells = $(row).find('td');
-        if (cells.length < 3) return;
-        const title = $(cells[1]).text().trim();
-        const agency = $(cells[2]).text().trim();
-        const deadline = $(cells[3]).text().trim();
-        const link = $(cells[0]).find('a').attr('href') || '';
+        if (cells.length < 2) return;
+        const anchor = $(row).find('a').first();
+        const title = anchor.text().trim() || $(cells[0]).text().trim();
+        const agency = $(cells[Math.min(1, cells.length-1)]).text().trim();
+        const deadline = $(cells[Math.min(cells.length-1, 3)]).text().trim();
+        const link = anchor.attr('href') || '';
         if (!title || title.length < 5) return;
 
         const id = 'MS-' + Buffer.from(title).toString('base64').slice(0, 20);
