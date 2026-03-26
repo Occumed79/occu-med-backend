@@ -264,7 +264,6 @@ async function fetchSubawards(daysBack = 90, extraKeywords = []) {
       filters: {
         time_period: [{ start_date: start, end_date: end }],
         keywords: batch,
-        award_type_codes: ['A', 'B', 'C', 'D'],
       },
       fields: [
         'Sub-Award ID', 'Sub-Awardee Name', 'Sub-Award Amount',
@@ -276,7 +275,17 @@ async function fetchSubawards(daysBack = 90, extraKeywords = []) {
 
     try {
       const { status, data } = await httpsPost(
-        'https://api.usaspending.gov/api/v2/search/spending_by_award/subawards/', body
+        'https://api.usaspending.gov/api/v2/search/spending_by_award/', 
+        JSON.stringify({
+          filters: {
+            time_period: [{ start_date: start, end_date: end }],
+            keywords: batch,
+            award_type_codes: ['A', 'B', 'C', 'D'],
+            award_type: 'contracts'
+          },
+          fields: ['Award ID','Recipient Name','Award Amount','Awarding Agency','Description','Place of Performance State Code'],
+          sort: 'Award Amount', order: 'desc', limit: 50, page: 1, subawards: true
+        })
       );
       if (status !== 200) { console.log(`  Subawards HTTP ${status}:`, JSON.stringify(data).slice(0,150)); continue; }
       for (const r of data.results || []) {
@@ -461,25 +470,18 @@ async function fetchFederalRegister() {
   const fmt = d => d.toISOString().split('T')[0];
 
   for (const term of terms) {
-    // Build URL with properly encoded brackets for Node https
-    const frParams = new URLSearchParams();
-    frParams.append('per_page', '20');
-    frParams.append('order', 'newest');
-    frParams.append('fields[]', 'title');
-    frParams.append('fields[]', 'document_number');
-    frParams.append('fields[]', 'publication_date');
-    frParams.append('fields[]', 'type');
-    frParams.append('fields[]', 'abstract');
-    frParams.append('fields[]', 'html_url');
-    frParams.append('fields[]', 'agencies');
-    frParams.append('fields[]', 'effective_on');
-    frParams.append('fields[]', 'comment_date');
-    frParams.append('conditions[term]', term);
-    frParams.append('conditions[publication_date][gte]', fmt(from));
-    frParams.append('conditions[type][]', 'RULE');
-    frParams.append('conditions[type][]', 'PRORULE');
-    frParams.append('conditions[type][]', 'NOTICE');
-    const url = `https://www.federalregister.gov/api/v1/documents.json?${frParams.toString()}`;
+    // Federal Register API — must use literal brackets, not %5B%5D encoded
+    const frBase = 'https://www.federalregister.gov/api/v1/documents.json';
+    const frQuery = [
+      'per_page=20', 'order=newest',
+      'fields[]=title', 'fields[]=document_number', 'fields[]=publication_date',
+      'fields[]=type', 'fields[]=abstract', 'fields[]=html_url',
+      'fields[]=agencies', 'fields[]=effective_on', 'fields[]=comment_date',
+      `conditions[term]=${encodeURIComponent(term)}`,
+      `conditions[publication_date][gte]=${fmt(from)}`,
+      'conditions[type][]=RULE', 'conditions[type][]=PRORULE', 'conditions[type][]=NOTICE'
+    ].join('&');
+    const url = `${frBase}?${frQuery}`;
     console.log(`\nFetching Federal Register: "${term}"...`);
     try {
       const { status, data } = await httpsGetH(url);
@@ -714,6 +716,29 @@ async function fetchGeorgia(keywords) {
   }
   console.log(`Georgia DOAS total: ${results.length}`);
   return results;
+}
+
+
+// ── Generic static page fetcher (for CFM/ASP sites) ─────────────────────────
+function scrapePage(url, label) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const req = https.request({
+      hostname: u.hostname, path: u.pathname + u.search, method: 'GET',
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; OccuMed/1.0)', 'Accept': 'text/html' },
+      timeout: 20000
+    }, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        resolve(scrapePage(res.headers.location, label)); return;
+      }
+      let raw = '';
+      res.on('data', d => raw += d);
+      res.on('end', () => { console.log(`  ${label}: HTTP ${res.statusCode}, ${raw.length} bytes`); resolve(raw); });
+    });
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
+    req.end();
+  });
 }
 
 // ── Louisiana LaPAC (static CFM — cheerio works fine) ────────────────────────
