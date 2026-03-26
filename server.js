@@ -459,7 +459,8 @@ async function fetchFederalRegister() {
   const fmt = d => d.toISOString().split('T')[0];
 
   for (const term of terms) {
-    const url = `https://www.federalregister.gov/api/v1/documents.json?per_page=20&order=newest&conditions%5Bterm%5D=${encodeURIComponent(term)}&conditions%5Bpublication_date%5D%5Bgte%5D=${fmt(from)}&conditions%5Btype%5D%5B%5D=RULE&conditions%5Btype%5D%5B%5D=PRORULE&conditions%5Btype%5D%5B%5D=NOTICE`;
+    const fields = 'fields[]=title&fields[]=document_number&fields[]=publication_date&fields[]=type&fields[]=abstract&fields[]=html_url&fields[]=agencies&fields[]=effective_on&fields[]=comment_date&fields[]=excerpts';
+    const url = `https://www.federalregister.gov/api/v1/documents.json?per_page=20&order=newest&${fields}&conditions%5Bterm%5D=${encodeURIComponent(term)}&conditions%5Bpublication_date%5D%5Bgte%5D=${fmt(from)}&conditions%5Btype%5D%5B%5D=RULE&conditions%5Btype%5D%5B%5D=PRORULE&conditions%5Btype%5D%5B%5D=NOTICE`;
     console.log(`\nFetching Federal Register: "${term}"...`);
     try {
       const { status, data } = await httpsGet(url);
@@ -472,7 +473,7 @@ async function fetchFederalRegister() {
         results.push({
           id, source: 'FEDREG',
           title: '[REG ALERT] ' + (d.title || 'Federal Register Notice'),
-          agency: d.agencies?.map(a => a.name).join(', ') || 'Federal Agency',
+          agency: (Array.isArray(d.agencies) ? d.agencies.map(a => a.name||a.raw_name||'').filter(Boolean).join(', ') : (d.agencies||'')) || 'Federal Agency',
           subAgency: '', office: '',
           solNum: d.document_number || '', noticeId: d.document_number || '',
           noticeType: d.type === 'PRORULE' ? 'Proposed Rule' : d.type === 'RULE' ? 'Final Rule' : 'Federal Notice',
