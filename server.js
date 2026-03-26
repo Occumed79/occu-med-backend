@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const https = require('https');
 const cheerio = require('cheerio');
+const puppeteer = require('puppeteer-core');
 
 require('dotenv').config({ path: './Env' });
 
@@ -362,7 +363,8 @@ async function fetchSBIR() {
 // Free tier: 100 req/day. Get key at tango.makegov.com
 // Set env var TANGO_API_KEY in your Render environment variables
 
-const TANGO_KEY = process.env.TANGO_API_KEY || '';
+const TANGO_KEY       = process.env.TANGO_API_KEY       || '';
+const BROWSERLESS_KEY = process.env.BROWSERLESS_API_KEY || '';
 const OCC_TERMS = [
   'occupational health', 'occupational medicine', 'drug testing',
   'pre-employment physical', 'medical surveillance', 'fit for duty',
@@ -513,284 +515,257 @@ async function fetchFederalRegister() {
   return results;
 }
 
-// ── State Scrapers ────────────────────────────────────────────────────────────
-// Server-side fetch of public procurement pages — no login, no ToS violation.
-// All these pages are publicly accessible and intended for vendor use.
+// ── State Scrapers (Puppeteer + Browserless.io) ──────────────────────────────
+// Uses headless Chrome via Browserless.io to scrape JS-rendered state portals.
+// Free tier: 6 hrs/month — more than enough for daily scraping.
+// Falls back to cheerio for old CFM/ASP sites that are static HTML.
 
-
-// Generic scraper helper
-async function scrapePage(url, label) {
-  return new Promise((resolve, reject) => {
-    const u = new URL(url);
-    const mod = u.protocol === 'https:' ? https : require('http');
-    const req = mod.request({
-      hostname: u.hostname, path: u.pathname + u.search, method: 'GET',
-      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; OccuMed-RFP-Bot/1.0)', 'Accept': 'text/html,application/xhtml+xml' },
-      timeout: 20000
-    }, (res) => {
-      let raw = '';
-      // Follow redirects
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        resolve(scrapePage(res.headers.location, label));
-        return;
-      }
-      res.on('data', d => raw += d);
-      res.on('end', () => { console.log(`  ${label}: HTTP ${res.statusCode}, ${raw.length} bytes`); resolve(raw); });
+async function scrapeWithPuppeteer(url, extractFn, label) {
+  if (!BROWSERLESS_KEY) {
+    console.log(`  ${label}: No BROWSERLESS_KEY set, skipping`);
+    return [];
+  }
+  let browser;
+  try {
+    browser = await puppeteer.connect({
+      browserWSEndpoint: `wss://chrome.browserless.io?token=${BROWSERLESS_KEY}`,
     });
-    req.on('error', reject);
-    req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
-    req.end();
-  });
+    const page = await browser.newPage();
+    await page.setDefaultNavigationTimeout(30000);
+    await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
+    const results = await page.evaluate(extractFn);
+    await browser.close();
+    console.log(`  ${label}: ${results.length} results`);
+    return results;
+  } catch(e) {
+    if (browser) try { await browser.close(); } catch(_) {}
+    console.error(`  ${label} error: ${e.message}`);
+    return [];
+  }
 }
 
-// Texas ESBD — public search, no login needed
+// ── Texas ESBD ────────────────────────────────────────────────────────────────
 async function fetchTexasESBD(keywords) {
+  const terms = keywords.length > 0 ? keywords.slice(0, 2) : ['occupational health', 'drug testing'];
   const results = [];
   const seen = new Set();
-  const terms = keywords.length > 0 ? keywords : ['occupational health', 'drug testing', 'medical', 'health services'];
 
-  for (const term of terms.slice(0, 3)) {
-    let prevCount = results.length;
-    try {
-      const url = `https://www.txsmartbuy.gov/esbd?keyword=${encodeURIComponent(term)}&status=Open`;
-      const html = await scrapePage(url, `TX ESBD "${term}"`);
-      const $ = cheerio.load(html);
-
-      // TX ESBD uses data-* attributes or specific class names
-      // Try multiple selector strategies
-      // TX ESBD structure: look for rows with solicitation links
-      const rows1 = $('table.ESBD_Results tr, table tr, .solicitation-row').toArray();
-      const rows2 = $('[id*="solicitationId"], a[href*="solicitationId"], a[href*="ESBD"]').closest('tr').toArray();
-      const allRows = rows2.length > 0 ? rows2 : (rows1.length > 1 ? rows1 : $('tr').toArray());
-      
-      allRows.forEach((row, i) => {
+  for (const term of terms) {
+    const url = `https://www.txsmartbuy.gov/esbd?keyword=${encodeURIComponent(term)}&status=Open`;
+    const rows = await scrapeWithPuppeteer(url, () => {
+      const items = [];
+      document.querySelectorAll('table tr').forEach((row, i) => {
         if (i === 0) return;
-        const cells = $(row).find('td');
-        if (cells.length < 2) return;
-        
-        // Try to find title via anchor tag first
-        const anchor = $(row).find('a').first();
-        const title = anchor.text().trim() || $(cells[0]).text().trim();
-        const link = anchor.attr('href') || '';
-        const agency = $(cells[cells.length > 3 ? 2 : 1]).text().trim();
-        const deadline = $(cells[cells.length - 1]).text().trim();
-        
-        if (!title || title.length < 5 || title.toLowerCase().includes('solicitation')) return;
-
-        const id = 'TX-' + Buffer.from(title).toString('base64').slice(0, 20);
-        if (seen.has(id)) return; seen.add(id);
-
-        results.push({
-          id, source: 'STATE-TX',
-          title, agency: agency || 'Texas State Agency',
-          subAgency: '', office: '',
-          solNum: '', noticeId: id,
-          noticeType: 'State Solicitation',
-          naicsCode: '621111', naicsDesc: '',
-          setAside: '', setAsideCode: '',
-          postedDate: null,
-          deadline: deadline || null,
-          archiveDate: null, active: true,
-          state: 'TX', city: '',
-          desc: '',
-          uiLink: link.startsWith('http') ? link : link ? `https://www.txsmartbuy.gov${link}` : `https://www.txsmartbuy.gov/esbd?keyword=${encodeURIComponent(term)}`,
-          contact: '', awardAmount: 0, recipient: '',
-          classCode: '', baseType: 'State Bid',
-        });
+        const cells = row.querySelectorAll('td');
+        if (cells.length < 3) return;
+        const anchor = row.querySelector('a');
+        const title = anchor ? anchor.textContent.trim() : cells[0].textContent.trim();
+        const agency = cells[1] ? cells[1].textContent.trim() : '';
+        const deadline = cells[cells.length - 1] ? cells[cells.length - 1].textContent.trim() : '';
+        const link = anchor ? anchor.href : '';
+        if (title && title.length > 5) items.push({ title, agency, deadline, link });
       });
-      const parsedCount = results.length - prevCount;
-      console.log(`  TX ESBD "${term}": ${parsedCount} parsed (${allRows.length} rows found in HTML)`);
-      prevCount = results.length;
-    } catch(e) { console.error(`  TX ESBD error for "${term}":`, e.message); }
+      return items;
+    }, `TX ESBD "${term}"`);
+
+    for (const r of rows) {
+      const id = 'TX-' + Buffer.from(r.title).toString('base64').slice(0, 20);
+      if (seen.has(id)) continue; seen.add(id);
+      results.push({
+        id, source: 'STATE-TX', title: r.title,
+        agency: r.agency || 'Texas State Agency',
+        subAgency: '', office: '', solNum: '', noticeId: id,
+        noticeType: 'State Solicitation', naicsCode: '621111', naicsDesc: '',
+        setAside: '', setAsideCode: '', postedDate: null,
+        deadline: r.deadline || null, archiveDate: null, active: true,
+        state: 'TX', city: '', desc: '',
+        uiLink: r.link || `https://www.txsmartbuy.gov/esbd?keyword=${encodeURIComponent(term)}`,
+        contact: '', awardAmount: 0, recipient: '', classCode: '', baseType: 'State Bid',
+      });
+    }
   }
+  console.log(`Texas ESBD total: ${results.length}`);
   return results;
 }
 
-// Virginia eVA — public procurement portal
+// ── Virginia eVA ──────────────────────────────────────────────────────────────
 async function fetchVirginiaEVA(keywords) {
+  const terms = keywords.length > 0 ? keywords.slice(0, 2) : ['occupational health', 'medical'];
   const results = [];
   const seen = new Set();
-  const terms = keywords.length > 0 ? keywords : ['occupational health', 'drug testing', 'medical services'];
 
-  for (const term of terms.slice(0, 3)) {
-    try {
-      // eVA public search — scrape the vendor opportunity search page
-      const url = `https://eva.virginia.gov/pages/vendor-bid-search.html?searchString=${encodeURIComponent(term)}&recordsPerPage=50&status=Open`;
-      const html = await scrapePage(url, `VA eVA "${term}"`);
-      const $ = cheerio.load(html);
-
-      $('.searchResultRow, .opportunity-row, tr.result-row').each((i, row) => {
-        const title = $(row).find('.title, .opp-title, td:first-child').first().text().trim();
-        const agency = $(row).find('.agency, .org-name, td:nth-child(2)').first().text().trim();
-        const deadline = $(row).find('.deadline, .close-date, td:nth-child(3)').first().text().trim();
-        const link = $(row).find('a').first().attr('href') || '';
-        if (!title || title.length < 5) return;
-
-        const id = 'VA-' + Buffer.from(title + agency).toString('base64').slice(0, 20);
-        if (seen.has(id)) return; seen.add(id);
-
-        results.push({
-          id, source: 'STATE-VA',
-          title, agency: agency || 'Virginia State Agency',
-          subAgency: '', office: '', solNum: '', noticeId: id,
-          noticeType: 'State Solicitation', naicsCode: '621111', naicsDesc: '',
-          setAside: '', setAsideCode: '',
-          postedDate: null, deadline: deadline || null,
-          archiveDate: null, active: true,
-          state: 'VA', city: '', desc: '',
-          uiLink: link.startsWith('http') ? link : `https://eva.virginia.gov${link}`,
-          contact: '', awardAmount: 0, recipient: '',
-          classCode: '', baseType: 'State Bid',
-        });
+  for (const term of terms) {
+    const url = `https://eva.virginia.gov/pages/eva-vendor-search-main-page.html#vendorSearch`;
+    const rows = await scrapeWithPuppeteer(url, (searchTerm) => {
+      // Wait for search box and trigger search
+      const items = [];
+      const rows = document.querySelectorAll('.opportunity-row, tr.data-row, tbody tr, .search-result');
+      rows.forEach(row => {
+        const title = row.querySelector('.title, td:first-child, h3, a')?.textContent?.trim();
+        const agency = row.querySelector('.agency, td:nth-child(2)')?.textContent?.trim();
+        const deadline = row.querySelector('.deadline, td:nth-child(3)')?.textContent?.trim();
+        const link = row.querySelector('a')?.href;
+        if (title && title.length > 5) items.push({ title, agency, deadline, link });
       });
-    } catch(e) { console.error(`  VA eVA error for "${term}":`, e.message); }
+      return items;
+    }, `VA eVA "${term}"`);
+
+    for (const r of rows) {
+      const id = 'VA-' + Buffer.from(r.title + (r.agency||'')).toString('base64').slice(0, 20);
+      if (seen.has(id)) continue; seen.add(id);
+      results.push({
+        id, source: 'STATE-VA', title: r.title,
+        agency: r.agency || 'Virginia State Agency',
+        subAgency: '', office: '', solNum: '', noticeId: id,
+        noticeType: 'State Solicitation', naicsCode: '621111', naicsDesc: '',
+        setAside: '', setAsideCode: '', postedDate: null,
+        deadline: r.deadline || null, archiveDate: null, active: true,
+        state: 'VA', city: '', desc: '',
+        uiLink: r.link || 'https://eva.virginia.gov',
+        contact: '', awardAmount: 0, recipient: '', classCode: '', baseType: 'State Bid',
+      });
+    }
   }
   console.log(`Virginia eVA total: ${results.length}`);
   return results;
 }
 
-// Louisiana LaPAC — completely public, clean HTML table
-async function fetchLouisiana(keywords) {
+// ── Colorado OSC ──────────────────────────────────────────────────────────────
+async function fetchColorado(keywords) {
+  const url = 'https://osc.colorado.gov/spco/solicitations';
+  const terms = keywords.length > 0 ? keywords.map(k => k.toLowerCase()) : ['health', 'medical', 'drug'];
+
+  const rows = await scrapeWithPuppeteer(url, () => {
+    const items = [];
+    document.querySelectorAll('table tr, .views-row, tr.odd, tr.even').forEach((row, i) => {
+      if (i === 0) return;
+      const anchor = row.querySelector('a');
+      const title = anchor?.textContent?.trim() || row.querySelector('td')?.textContent?.trim();
+      const agency = row.querySelectorAll('td')[1]?.textContent?.trim() || '';
+      const deadline = row.querySelector('td:last-child')?.textContent?.trim() || '';
+      const link = anchor?.href || '';
+      if (title && title.length > 5) items.push({ title, agency, deadline, link });
+    });
+    return items;
+  }, 'CO OSC');
+
   const results = [];
   const seen = new Set();
-  const terms = keywords.length > 0 ? keywords : ['health', 'medical', 'drug'];
+  for (const r of rows) {
+    const titleLower = r.title.toLowerCase();
+    if (!terms.some(t => titleLower.includes(t))) continue;
+    const id = 'CO-' + Buffer.from(r.title).toString('base64').slice(0, 20);
+    if (seen.has(id)) continue; seen.add(id);
+    results.push({
+      id, source: 'STATE-CO', title: r.title,
+      agency: r.agency || 'Colorado State Agency',
+      subAgency: '', office: '', solNum: '', noticeId: id,
+      noticeType: 'State Solicitation', naicsCode: '621111', naicsDesc: '',
+      setAside: '', setAsideCode: '', postedDate: null,
+      deadline: r.deadline || null, archiveDate: null, active: true,
+      state: 'CO', city: '', desc: '',
+      uiLink: r.link || 'https://osc.colorado.gov/spco/solicitations',
+      contact: '', awardAmount: 0, recipient: '', classCode: '', baseType: 'State Bid',
+    });
+  }
+  console.log(`Colorado OSC total: ${results.length}`);
+  return results;
+}
 
-  for (const term of terms.slice(0, 3)) {
+// ── Georgia DOAS ──────────────────────────────────────────────────────────────
+async function fetchGeorgia(keywords) {
+  const terms = keywords.length > 0 ? keywords.slice(0, 2) : ['health', 'medical'];
+  const results = [];
+  const seen = new Set();
+
+  for (const term of terms) {
+    const url = `https://ssl.doas.state.ga.us/PRSapp/PR_Search_Results.jsp?searchText=${encodeURIComponent(term)}&statusCode=A&agencyID=0`;
+    const rows = await scrapeWithPuppeteer(url, () => {
+      const items = [];
+      document.querySelectorAll('table tr, tr.dataRow, tr.altRow').forEach((row, i) => {
+        if (i === 0) return;
+        const cells = row.querySelectorAll('td');
+        if (cells.length < 3) return;
+        const anchor = row.querySelector('a');
+        const title = cells[1]?.textContent?.trim() || anchor?.textContent?.trim();
+        const agency = cells[2]?.textContent?.trim() || '';
+        const deadline = cells[4]?.textContent?.trim() || cells[cells.length-1]?.textContent?.trim() || '';
+        const link = anchor?.href || '';
+        if (title && title.length > 5) items.push({ title, agency, deadline, link });
+      });
+      return items;
+    }, `GA DOAS "${term}"`);
+
+    for (const r of rows) {
+      const id = 'GA-' + Buffer.from(r.title + (r.agency||'')).toString('base64').slice(0, 20);
+      if (seen.has(id)) continue; seen.add(id);
+      results.push({
+        id, source: 'STATE-GA', title: r.title,
+        agency: r.agency || 'Georgia State Agency',
+        subAgency: '', office: '', solNum: '', noticeId: id,
+        noticeType: 'State Solicitation', naicsCode: '621111', naicsDesc: '',
+        setAside: '', setAsideCode: '', postedDate: null,
+        deadline: r.deadline || null, archiveDate: null, active: true,
+        state: 'GA', city: '', desc: '',
+        uiLink: r.link || 'https://ssl.doas.state.ga.us/PRSapp/PR_Search_Results.jsp',
+        contact: '', awardAmount: 0, recipient: '', classCode: '', baseType: 'State Bid',
+      });
+    }
+  }
+  console.log(`Georgia DOAS total: ${results.length}`);
+  return results;
+}
+
+// ── Louisiana LaPAC (static CFM — cheerio works fine) ────────────────────────
+async function fetchLouisiana(keywords) {
+  const terms = keywords.length > 0 ? keywords.slice(0, 2) : ['health', 'medical'];
+  const results = [];
+  const seen = new Set();
+
+  for (const term of terms) {
     try {
-      const url = `https://wwwcfprd.doa.louisiana.gov/osp/lapac/bidList.cfm?keyWord=${encodeURIComponent(term)}&statusCode=O`;
+      const url = `https://wwwcfprd.doa.louisiana.gov/osp/lapac/srchopen.cfm?deptno=all&catno=all&dateStart=&dateEnd=&compareDate=O&keywords=${encodeURIComponent(term)}&keywordsCheck=all`;
       const html = await scrapePage(url, `LA LaPAC "${term}"`);
       const $ = cheerio.load(html);
 
       $('table tr').each((i, row) => {
         if (i === 0) return;
         const cells = $(row).find('td');
-        if (cells.length < 4) return;
-        const title = $(cells[1]).text().trim();
-        const agency = $(cells[2]).text().trim();
-        const deadline = $(cells[3]).text().trim();
-        const link = $(cells[1]).find('a').attr('href') || '';
+        if (cells.length < 2) return;
+        const anchor = $(row).find('a').first();
+        const title = anchor.text().trim() || $(cells[0]).text().trim();
+        const agency = $(cells[1]).text().trim();
+        const deadline = $(cells[2]).text().trim();
+        const link = anchor.attr('href') || '';
         if (!title || title.length < 5) return;
 
         const id = 'LA-' + Buffer.from(title).toString('base64').slice(0, 20);
         if (seen.has(id)) return; seen.add(id);
-
         results.push({
-          id, source: 'STATE-LA',
-          title, agency: agency || 'Louisiana State Agency',
+          id, source: 'STATE-LA', title,
+          agency: agency || 'Louisiana State Agency',
           subAgency: '', office: '', solNum: '', noticeId: id,
           noticeType: 'State Solicitation', naicsCode: '621111', naicsDesc: '',
-          setAside: '', setAsideCode: '',
-          postedDate: null, deadline: deadline || null,
-          archiveDate: null, active: true,
+          setAside: '', setAsideCode: '', postedDate: null,
+          deadline: deadline || null, archiveDate: null, active: true,
           state: 'LA', city: '', desc: '',
           uiLink: link.startsWith('http') ? link : `https://wwwcfprd.doa.louisiana.gov${link}`,
-          contact: '', awardAmount: 0, recipient: '',
-          classCode: '', baseType: 'State Bid',
+          contact: '', awardAmount: 0, recipient: '', classCode: '', baseType: 'State Bid',
         });
       });
-    } catch(e) { console.error(`  LA LaPAC error for "${term}":`, e.message); }
+    } catch(e) { console.error(`  LA LaPAC error: ${e.message}`); }
   }
   console.log(`Louisiana LaPAC total: ${results.length}`);
   return results;
 }
 
-// Colorado OSC — public solicitations page
-async function fetchColorado(keywords) {
-  const results = [];
-  const seen = new Set();
-  try {
-    const url = 'https://osc.colorado.gov/spco/solicitations';
-    const html = await scrapePage(url, 'CO OSC');
-    const $ = cheerio.load(html);
-    const terms = keywords.length > 0 ? keywords.map(k => k.toLowerCase()) : ['health', 'medical', 'drug'];
-
-    // Try multiple selectors — Colorado OSC uses Drupal views
-    const allCoRows = $('table tbody tr, .views-row, tr.odd, tr.even').toArray();
-    const coRows = allCoRows.length > 0 ? allCoRows : $('table tr').toArray();
-    coRows.forEach((row, i) => {
-      if (i === 0 && allCoRows.length === 0) return; // skip header only if raw table
-      const title = $(row).find('a, td:first-child a, .views-field-title a, h3 a').first().text().trim()
-        || $(row).find('td:first-child, .title').first().text().trim();
-      const agency = $(row).find('td:nth-child(2), .agency, .views-field-field-agency').first().text().trim();
-      const deadline = $(row).find('td:last-child, td:nth-child(4), .views-field-field-deadline').first().text().trim();
-      const link = $(row).find('a').first().attr('href') || '';
-      if (!title || title.length < 5) return;
-
-      // Apply relevance filter since we can't keyword-search the page
-      const titleLower = title.toLowerCase();
-      if (!terms.some(t => titleLower.includes(t))) return;
-
-      const id = 'CO-' + Buffer.from(title).toString('base64').slice(0, 20);
-      if (seen.has(id)) return; seen.add(id);
-
-      results.push({
-        id, source: 'STATE-CO',
-        title, agency: agency || 'Colorado State Agency',
-        subAgency: '', office: '', solNum: '', noticeId: id,
-        noticeType: 'State Solicitation', naicsCode: '621111', naicsDesc: '',
-        setAside: '', setAsideCode: '',
-        postedDate: null, deadline: deadline || null,
-        archiveDate: null, active: true,
-        state: 'CO', city: '', desc: '',
-        uiLink: link.startsWith('http') ? link : `https://osc.colorado.gov${link}`,
-        contact: '', awardAmount: 0, recipient: '',
-        classCode: '', baseType: 'State Bid',
-      });
-    });
-  } catch(e) { console.error('  Colorado OSC error:', e.message); }
-  console.log(`Colorado OSC total: ${results.length}`);
-  return results;
-}
-
-// Georgia DOAS — public procurement registry
-async function fetchGeorgia(keywords) {
-  const results = [];
-  const seen = new Set();
-  const terms = keywords.length > 0 ? keywords : ['health', 'medical', 'drug testing'];
-
-  for (const term of terms.slice(0, 3)) {
-    try {
-      const url = `https://ssl.doas.state.ga.us/PRSapp/PR_Search_Results.jsp?searchText=${encodeURIComponent(term)}&statusCode=A&agencyID=0`;
-      const html = await scrapePage(url, `GA DOAS "${term}"`);
-      const $ = cheerio.load(html);
-
-      $('table.results tr, tr.dataRow').each((i, row) => {
-        const title = $(row).find('td:nth-child(2), .title').first().text().trim();
-        const agency = $(row).find('td:nth-child(3), .agency').first().text().trim();
-        const deadline = $(row).find('td:nth-child(5), .deadline').first().text().trim();
-        const link = $(row).find('a').first().attr('href') || '';
-        if (!title || title.length < 5) return;
-
-        const id = 'GA-' + Buffer.from(title + agency).toString('base64').slice(0, 20);
-        if (seen.has(id)) return; seen.add(id);
-
-        results.push({
-          id, source: 'STATE-GA',
-          title, agency: agency || 'Georgia State Agency',
-          subAgency: '', office: '', solNum: '', noticeId: id,
-          noticeType: 'State Solicitation', naicsCode: '621111', naicsDesc: '',
-          setAside: '', setAsideCode: '',
-          postedDate: null, deadline: deadline || null,
-          archiveDate: null, active: true,
-          state: 'GA', city: '', desc: '',
-          uiLink: link.startsWith('http') ? link : `https://ssl.doas.state.ga.us${link}`,
-          contact: '', awardAmount: 0, recipient: '',
-          classCode: '', baseType: 'State Bid',
-        });
-      });
-    } catch(e) { console.error(`  GA DOAS error:`, e.message); }
-  }
-  console.log(`Georgia DOAS total: ${results.length}`);
-  return results;
-}
-
-// Mississippi — clean public procurement search
+// ── Mississippi (static — cheerio) ───────────────────────────────────────────
 async function fetchMississippi(keywords) {
+  const terms = keywords.length > 0 ? keywords.slice(0, 2) : ['health', 'medical'];
   const results = [];
   const seen = new Set();
-  const terms = keywords.length > 0 ? keywords : ['health', 'medical', 'drug'];
 
-  for (const term of terms.slice(0, 3)) {
+  for (const term of terms) {
     try {
       const url = `https://www.ms.gov/dfa/contract_bid_search/Bid/BidSearch?keyword=${encodeURIComponent(term)}&status=0`;
       const html = await scrapePage(url, `MS "${term}"`);
@@ -802,47 +777,46 @@ async function fetchMississippi(keywords) {
         if (cells.length < 2) return;
         const anchor = $(row).find('a').first();
         const title = anchor.text().trim() || $(cells[0]).text().trim();
-        const agency = $(cells[Math.min(1, cells.length-1)]).text().trim();
-        const deadline = $(cells[Math.min(cells.length-1, 3)]).text().trim();
+        const agency = $(cells[1]).text().trim();
+        const deadline = $(cells[cells.length - 1]).text().trim();
         const link = anchor.attr('href') || '';
         if (!title || title.length < 5) return;
 
         const id = 'MS-' + Buffer.from(title).toString('base64').slice(0, 20);
         if (seen.has(id)) return; seen.add(id);
-
         results.push({
-          id, source: 'STATE-MS',
-          title, agency: agency || 'Mississippi State Agency',
+          id, source: 'STATE-MS', title,
+          agency: agency || 'Mississippi State Agency',
           subAgency: '', office: '', solNum: '', noticeId: id,
           noticeType: 'State Solicitation', naicsCode: '621111', naicsDesc: '',
-          setAside: '', setAsideCode: '',
-          postedDate: null, deadline: deadline || null,
-          archiveDate: null, active: true,
+          setAside: '', setAsideCode: '', postedDate: null,
+          deadline: deadline || null, archiveDate: null, active: true,
           state: 'MS', city: '', desc: '',
           uiLink: link.startsWith('http') ? link : `https://www.ms.gov${link}`,
-          contact: '', awardAmount: 0, recipient: '',
-          classCode: '', baseType: 'State Bid',
+          contact: '', awardAmount: 0, recipient: '', classCode: '', baseType: 'State Bid',
         });
       });
-    } catch(e) { console.error(`  MS error:`, e.message); }
+    } catch(e) { console.error(`  MS error: ${e.message}`); }
   }
   console.log(`Mississippi total: ${results.length}`);
   return results;
 }
 
-// Master state scraper — runs all states and combines
+// ── Master state scraper ──────────────────────────────────────────────────────
 async function fetchStateBids(extraKeywords = []) {
   console.log('\nFetching state portals...');
-  const [tx, va, la, co, ga, ms] = await Promise.allSettled([
-    fetchTexasESBD(extraKeywords),
-    fetchVirginiaEVA(extraKeywords),
+  // Run Puppeteer scrapers sequentially to avoid RAM exhaustion on free tier
+  const tx = await fetchTexasESBD(extraKeywords);
+  const va = await fetchVirginiaEVA(extraKeywords);
+  const co = await fetchColorado(extraKeywords);
+  const ga = await fetchGeorgia(extraKeywords);
+  // Static scrapers can run in parallel — no browser overhead
+  const [la, ms] = await Promise.allSettled([
     fetchLouisiana(extraKeywords),
-    fetchColorado(extraKeywords),
-    fetchGeorgia(extraKeywords),
     fetchMississippi(extraKeywords),
   ]);
   const get = r => r.status === 'fulfilled' ? r.value : [];
-  const all = [...get(tx), ...get(va), ...get(la), ...get(co), ...get(ga), ...get(ms)];
+  const all = [...tx, ...va, ...co, ...ga, ...get(la), ...get(ms)];
   console.log(`State portals combined: ${all.length}`);
   return all;
 }
