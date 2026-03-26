@@ -266,26 +266,15 @@ async function fetchSubawards(daysBack = 90, extraKeywords = []) {
         keywords: batch,
       },
       fields: [
-        'Sub-Award ID', 'Sub-Awardee Name', 'Sub-Award Amount',
-        'Awarding Agency', 'Sub-Award Description',
-        'Place of Performance State Code'
+        'Sub-Award ID', 'Sub-Award Type', 'Sub-Awardee Name', 'Sub-Award Date',
+        'Sub-Award Amount', 'Awarding Agency', 'Sub-Award Description'
       ],
-      limit: 50, page: 1
+      sort: 'Sub-Award Amount', order: 'desc', limit: 50, page: 1
     });
 
     try {
       const { status, data } = await httpsPost(
-        'https://api.usaspending.gov/api/v2/search/spending_by_award/', 
-        JSON.stringify({
-          filters: {
-            time_period: [{ start_date: start, end_date: end }],
-            keywords: batch,
-            award_type_codes: ['A', 'B', 'C', 'D'],
-            award_type: 'contracts'
-          },
-          fields: ['Award ID','Recipient Name','Award Amount','Awarding Agency','Description','Place of Performance State Code'],
-          sort: 'Award Amount', order: 'desc', limit: 50, page: 1, subawards: true
-        })
+        'https://api.usaspending.gov/api/v2/search/spending_by_award/subawards/', body
       );
       if (status !== 200) { console.log(`  Subawards HTTP ${status}:`, JSON.stringify(data).slice(0,150)); continue; }
       for (const r of data.results || []) {
@@ -484,7 +473,22 @@ async function fetchFederalRegister() {
     const url = `${frBase}?${frQuery}`;
     console.log(`\nFetching Federal Register: "${term}"...`);
     try {
-      const { status, data } = await httpsGetH(url);
+      // Use https.request directly to preserve literal brackets in query string
+      const { status, data } = await new Promise((resolve, reject) => {
+        const req = https.request({
+          hostname: 'www.federalregister.gov',
+          path: '/api/v1/documents.json?' + frQuery,
+          method: 'GET',
+          headers: { 'Accept': 'application/json' },
+          timeout: 20000
+        }, (res) => {
+          let raw = ''; res.on('data', d => raw += d);
+          res.on('end', () => { try { resolve({ status: res.statusCode, data: JSON.parse(raw) }); } catch(e) { reject(e); } });
+        });
+        req.on('error', reject);
+        req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
+        req.end();
+      });
       if (status !== 200) { console.log(`  FedReg "${term}": HTTP ${status}`); continue; }
       const docs = data.results || [];
       console.log(`  FedReg "${term}": ${docs.length} results`);
@@ -556,19 +560,39 @@ async function fetchTexasESBD(keywords) {
     const url = `https://www.txsmartbuy.gov/esbd?keyword=${encodeURIComponent(term)}&status=Open`;
     const rows = await scrapeWithPuppeteer(url, () => {
       const items = [];
-      document.querySelectorAll('table tr').forEach((row, i) => {
+      // TX ESBD renders data into various possible containers
+      const selectors = [
+        'table tbody tr',
+        '.esbd-results tr',
+        '[class*="result"] tr',
+        '.grid tr',
+        'tr[data-key]',
+        'tbody tr'
+      ];
+      let found = [];
+      for (const sel of selectors) {
+        const els = document.querySelectorAll(sel);
+        if (els.length > 1) { found = Array.from(els); break; }
+      }
+      if (!found.length) found = Array.from(document.querySelectorAll('tr'));
+      found.forEach((row, i) => {
         if (i === 0) return;
         const cells = row.querySelectorAll('td');
-        if (cells.length < 3) return;
+        if (cells.length < 2) return;
         const anchor = row.querySelector('a');
-        const title = anchor ? anchor.textContent.trim() : cells[0].textContent.trim();
-        const agency = cells[1] ? cells[1].textContent.trim() : '';
-        const deadline = cells[cells.length - 1] ? cells[cells.length - 1].textContent.trim() : '';
-        const link = anchor ? anchor.href : '';
-        if (title && title.length > 5) items.push({ title, agency, deadline, link });
+        const title = (anchor?.textContent || cells[0]?.textContent || '').trim();
+        const agency = (cells[1]?.textContent || '').trim();
+        const deadline = (cells[cells.length-1]?.textContent || '').trim();
+        const link = anchor?.href || '';
+        if (title && title.length > 5 && !title.includes('No results') && !title.includes('Sign in'))
+          items.push({ title, agency, deadline, link });
       });
+      // Also log page structure for debugging
+      items._pageTitle = document.title;
+      items._bodySnippet = document.body?.innerText?.slice(0, 200) || '';
       return items;
     }, `TX ESBD "${term}"`);
+    if (rows._bodySnippet) console.log(`  TX page snippet: ${rows._bodySnippet.slice(0,100)}`);
 
     for (const r of rows) {
       const id = 'TX-' + Buffer.from(r.title).toString('base64').slice(0, 20);
