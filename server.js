@@ -307,6 +307,7 @@ async function fetchSubawards(daysBack = 90, extraKeywords = []) {
       filters: {
         time_period: [{ start_date: start, end_date: end }],
         keywords: batch,
+        award_type_codes: ['02', '03', '04', '05', '06', '07', '08', '09', '10', '11'],
       },
       fields: [
         'Sub-Award ID', 'Sub-Award Type', 'Sub-Awardee Name', 'Sub-Award Date',
@@ -504,13 +505,14 @@ async function fetchFederalRegister() {
   for (const term of terms) {
     // Federal Register API — must use literal brackets, not %5B%5D encoded
     const frBase = 'https://www.federalregister.gov/api/v1/documents.json';
+    // Note: bracket params MUST remain literal (not %5B%5D encoded)
+    // Date filter removed from primary query as it causes intermittent 400s
     const frQuery = [
       'per_page=20', 'order=newest',
       'fields[]=title', 'fields[]=document_number', 'fields[]=publication_date',
       'fields[]=type', 'fields[]=abstract', 'fields[]=html_url',
       'fields[]=agencies', 'fields[]=effective_on', 'fields[]=comment_date',
       `conditions[term]=${encodeURIComponent(term)}`,
-      `conditions[publication_date][gte]=${fmt(from)}`,
       'conditions[type][]=RULE', 'conditions[type][]=PRORULE', 'conditions[type][]=NOTICE'
     ].join('&');
     const url = `${frBase}?${frQuery}`;
@@ -533,38 +535,7 @@ async function fetchFederalRegister() {
         req.end();
       });
       if (status !== 200) {
-        // 400 often means the date range is empty or term has special chars
-        // Try without date filter as fallback
-        console.log(`  FedReg "${term}": HTTP ${status} — retrying without date filter`);
-        try {
-          const frQueryFallback = [
-            'per_page=20', 'order=newest',
-            'fields[]=title', 'fields[]=document_number', 'fields[]=publication_date',
-            'fields[]=type', 'fields[]=abstract', 'fields[]=html_url',
-            'fields[]=agencies', 'fields[]=effective_on', 'fields[]=comment_date',
-            `conditions[term]=${encodeURIComponent(term)}`,
-            'conditions[type][]=RULE', 'conditions[type][]=PRORULE', 'conditions[type][]=NOTICE'
-          ].join('&');
-          const { status: s2, data: d2 } = await new Promise((res2, rej2) => {
-            const r2 = https.request({
-              hostname: 'www.federalregister.gov', path: '/api/v1/documents.json?' + frQueryFallback,
-              method: 'GET', headers: { 'Accept': 'application/json' }, timeout: 20000
-            }, (resp) => {
-              let raw2 = ''; resp.on('data', d => raw2 += d);
-              resp.on('end', () => { try { res2({ status: resp.statusCode, data: JSON.parse(raw2) }); } catch(e) { rej2(e); } });
-            });
-            r2.on('error', rej2); r2.on('timeout', () => { r2.destroy(); rej2(new Error('timeout')); }); r2.end();
-          });
-          if (s2 === 200) {
-            const docs2 = d2.results || [];
-            console.log(`  FedReg "${term}" fallback: ${docs2.length} results`);
-            for (const d of docs2) {
-              const id = 'FEDREG-' + (d.document_number || Math.random());
-              if (seen.has(id)) continue; seen.add(id);
-              results.push({ id, source:'FEDREG', title:'[REG ALERT] '+(d.title||''), agency:(Array.isArray(d.agencies)?d.agencies.map(a=>a.name||a.raw_name||'').filter(Boolean).join(', '):'') || 'Federal Agency', subAgency:'', office:'', solNum:d.document_number||'', noticeId:d.document_number||'', noticeType:d.type==='PRORULE'?'Proposed Rule':d.type==='RULE'?'Final Rule':'Federal Notice', naicsCode:'621111', naicsDesc:'Occupational Medicine', setAside:'', setAsideCode:'', postedDate:d.publication_date||null, deadline:d.effective_on||d.comment_date||null, archiveDate:null, active:true, state:'', city:'', desc:d.abstract||d.excerpts||'', uiLink:d.html_url||'https://www.federalregister.gov', contact:'', awardAmount:0, recipient:'', classCode:'', baseType:'Regulatory Notice' });
-            }
-          }
-        } catch(e2) { console.error(`  FedReg fallback error: ${e2.message}`); }
+        console.log(`  FedReg "${term}": HTTP ${status} — skipping`);
         continue;
       }
       const docs = data.results || [];
@@ -603,27 +574,54 @@ async function fetchFederalRegister() {
 // Free tier: 6 hrs/month — more than enough for daily scraping.
 // Falls back to cheerio for old CFM/ASP sites that are static HTML.
 
+// Puppeteer semaphore — max 1 concurrent connection, 4s delay between calls
+// Prevents Browserless free tier 429s from concurrent requests
+let puppeteerBusy = false;
+const puppeteerQueue = [];
+async function puppeteerSlot() {
+  if (!puppeteerBusy) { puppeteerBusy = true; return; }
+  return new Promise(resolve => puppeteerQueue.push(resolve));
+}
+function puppeteerRelease() {
+  if (puppeteerQueue.length > 0) {
+    const next = puppeteerQueue.shift();
+    setTimeout(next, 4000); // 4s gap between calls
+  } else {
+    puppeteerBusy = false;
+  }
+}
+
 async function scrapeWithPuppeteer(url, extractFn, label) {
   if (!BROWSERLESS_KEY) {
     console.log(`  ${label}: No BROWSERLESS_KEY set, skipping`);
     return [];
   }
+  await puppeteerSlot(); // wait for our turn
   let browser;
   try {
     browser = await puppeteer.connect({
       browserWSEndpoint: `wss://chrome.browserless.io?token=${BROWSERLESS_KEY}`,
     });
     const page = await browser.newPage();
-    await page.setDefaultNavigationTimeout(30000);
-    await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
+    await page.setDefaultNavigationTimeout(45000);
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
+    // Small wait for JS to settle
+    await new Promise(r => setTimeout(r, 2000));
     const results = await page.evaluate(extractFn);
     await browser.close();
     console.log(`  ${label}: ${results.length} results`);
     return results;
   } catch(e) {
     if (browser) try { await browser.close(); } catch(_) {}
-    console.error(`  ${label} error: ${e.message}`);
+    // 429 from Browserless = rate limited, not a bug
+    if (e.message && e.message.includes('429')) {
+      console.log(`  ${label}: Browserless rate limit hit — skipping (free tier exhausted for now)`);
+    } else {
+      console.error(`  ${label} error: ${e.message}`);
+    }
     return [];
+  } finally {
+    puppeteerRelease();
   }
 }
 
@@ -1012,7 +1010,7 @@ async function fetchLouisiana(keywords) {
 
   for (const term of terms) {
     try {
-      const url = `https://lagovpsprd.doa.louisiana.gov/osp/lapac/srchopen.cfm?deptno=all&catno=all&dateStart=&dateEnd=&compareDate=O&keywords=${encodeURIComponent(term)}&keywordsCheck=all`;
+      const url = `https://wwwcfprd.doa.louisiana.gov/osp/lapac/srchopen.cfm?deptno=all&catno=all&dateStart=&dateEnd=&compareDate=O&keywords=${encodeURIComponent(term)}&keywordsCheck=all`;
       const html = await scrapePage(url, `LA LaPAC "${term}"`);
       if (!html || html.length < 200) { console.error('  LA: empty response'); continue; }
       const $ = cheerio.load(html);
@@ -1155,73 +1153,58 @@ async function fetchStateBids(extraKeywords = []) {
 // NAICS 621111/812990/621999 filtered directly
 // Note: FPDS ezsearch being decommissioned FY2026 but active now
 async function fetchFPDS() {
-  const results = [];
-  const seen = new Set();
-  const naicsCodes = ['621111', '812990', '621999'];
-  
-  for (const naics of naicsCodes) {
-    try {
-      const today = new Date();
-      const from = new Date(); from.setDate(from.getDate() - 90);
-      const fmt = d => d.toISOString().split('T')[0].replace(/-/g, '');
-      const url = `https://www.fpds.gov/ezsearch/FEEDS/ATOM?FEEDNAME=PUBLIC&q=NAICS_CODE:"${naics}"+LAST_MOD_DATE:[${fmt(from)},${fmt(today)}]`;
-      
-      console.log(`  FPDS NAICS ${naics}...`);
-      const xml = await new Promise((resolve, reject) => {
-        const req = https.request({
-          hostname: 'www.fpds.gov',
-          path: `/ezsearch/FEEDS/ATOM?FEEDNAME=PUBLIC&q=NAICS_CODE:"${naics}"+LAST_MOD_DATE:[${fmt(from)},${fmt(today)}]`,
-          method: 'GET',
-          headers: { 'Accept': 'application/xml, text/xml', 'User-Agent': 'OccuMed/1.0' },
-          timeout: 20000
-        }, (res) => {
-          let raw = ''; res.on('data', d => raw += d);
-          res.on('end', () => resolve({ status: res.statusCode, body: raw }));
-        });
-        req.on('error', reject);
-        req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
-        req.end();
+  // FPDS.gov ezsearch is decommissioned — replaced with USASpending Awards API
+  // which sources directly from FPDS and is the official replacement per GSA
+  console.log('  FPDS: using USASpending Awards API (official FPDS replacement)...');
+  try {
+    const { start } = dateRange(90);
+    const body = JSON.stringify({
+      filters: {
+        time_period: [{ start_date: start, end_date: new Date().toISOString().split('T')[0] }],
+        naics_codes: ['621111', '812990', '621999'],
+        award_type_codes: ['A','B','C','D'],
+      },
+      fields: ['Award ID','Recipient Name','Award Amount','Awarding Agency',
+               'Awarding Sub Agency','NAICS Code','NAICS Description',
+               'Description','Start Date','End Date',
+               'Place of Performance State Code','Place of Performance City Name'],
+      sort: 'Award Amount', order: 'desc', limit: 50, page: 1, subawards: false
+    });
+    const { status, data } = await httpsPost(
+      'https://api.usaspending.gov/api/v2/search/spending_by_award/', body
+    );
+    if (status !== 200) { console.log(`  FPDS/USASpending: HTTP ${status}`); return []; }
+    const results = [];
+    const seen = new Set();
+    for (const r of (data.results || [])) {
+      const awardId = r['Award ID'] || String(Math.random());
+      const id = 'FPDS-' + awardId;
+      if (seen.has(id)) continue; seen.add(id);
+      results.push({
+        id, source: 'FPDS',
+        title: (r['Description'] || 'Federal Contract Award').substring(0, 200),
+        agency: r['Awarding Agency'] || 'Federal Agency',
+        subAgency: r['Awarding Sub Agency'] || '', office: '',
+        solNum: awardId, noticeId: awardId,
+        noticeType: 'Contract Award (FPDS)',
+        naicsCode: r['NAICS Code'] || '621111', naicsDesc: r['NAICS Description'] || '',
+        setAside: '', setAsideCode: '',
+        postedDate: r['Start Date'] || null, deadline: r['End Date'] || null,
+        archiveDate: null, active: false,
+        state: r['Place of Performance State Code'] || '',
+        city: r['Place of Performance City Name'] || '',
+        desc: `Recipient: ${r['Recipient Name'] || 'N/A'}. Value: $${Number(r['Award Amount']||0).toLocaleString()}.`,
+        uiLink: `https://www.usaspending.gov/award/${encodeURIComponent(awardId)}`,
+        contact: '', awardAmount: r['Award Amount'] || 0,
+        recipient: r['Recipient Name'] || '', classCode: '', baseType: 'FPDS Award',
       });
-
-      if (xml.status !== 200) { console.log(`  FPDS NAICS ${naics}: HTTP ${xml.status}`); continue; }
-      
-      // Parse XML with regex (no xml2js needed)
-      const entries = xml.body.match(/<entry>([\s\S]*?)<\/entry>/g) || [];
-      console.log(`  FPDS NAICS ${naics}: ${entries.length} entries`);
-
-      for (const entry of entries) {
-        const get = (tag) => { const m = entry.match(new RegExp(`<${tag}[^>]*>([\s\S]*?)</${tag}>`)); return m ? m[1].replace(/<!\[CDATA\[|\]\]>/g,'').trim() : ''; };
-        const title = get('title') || get('name');
-        const id = 'FPDS-' + (get('id') || Math.random());
-        if (seen.has(id) || !title) continue; seen.add(id);
-        
-        const agency = get('agencyName') || get('contractingAgencyName') || 'Federal Agency';
-        const awardAmt = parseFloat(get('obligatedAmount') || get('totalObligatedAmount') || '0');
-        const link = (entry.match(/href="([^"]*)"/) || [])[1] || 'https://www.fpds.gov';
-        const dateStr = get('signedDate') || get('lastModifiedDate') || '';
-        
-        results.push({
-          id, source: 'FPDS',
-          title: title.substring(0, 200),
-          agency, subAgency: get('subAgencyName') || '', office: '',
-          solNum: get('PIID') || get('contractNumber') || '',
-          noticeId: id, noticeType: 'Contract Award (FPDS)',
-          naicsCode: naics, naicsDesc: '',
-          setAside: get('typeOfSetAside') || '', setAsideCode: '',
-          postedDate: dateStr || null, deadline: null,
-          archiveDate: null, active: true,
-          state: get('placeOfPerformanceState') || '',
-          city: get('placeOfPerformanceCity') || '',
-          desc: get('description') || get('productOrServiceCode') || '',
-          uiLink: link,
-          contact: '', awardAmount: awardAmt, recipient: get('vendorName') || '',
-          classCode: '', baseType: 'FPDS Award',
-        });
-      }
-    } catch(e) { console.error(`  FPDS NAICS error: ${e.message}`); }
+    }
+    console.log(`FPDS total: ${results.length}`);
+    return results;
+  } catch(e) {
+    console.error(`  FPDS error: ${e.message}`);
+    return [];
   }
-  console.log(`FPDS total: ${results.length}`);
-  return results;
 }
 
 // ── North Carolina IPS ────────────────────────────────────────────────────────
@@ -1692,7 +1675,7 @@ async function fetchMichigan(keywords) {
   const results = [];
   const seen = new Set();
   for (const term of terms) {
-    const url = `https://sigma.michigan.gov/webapp/PRDVSS2X1/AltSelfService`;
+    const url = `https://sigma.michigan.gov/PRDVSS1X1/AltSelfService`;
     const rows = await scrapeWithPuppeteer(url, () => {
       const items = [];
       document.querySelectorAll('table tr, .result-row').forEach((row, i) => {
@@ -1768,7 +1751,7 @@ async function fetchMinnesota(keywords) {
   const results = [];
   const seen = new Set();
   for (const term of terms) {
-    const url = `https://supplier.swift.state.mn.us/psp/supp/?cmd=login&languageCd=ENG`;
+    const url = `https://www.mmd.admin.state.mn.us/solicitations.htm`;
     const rows = await scrapeWithPuppeteer(url, () => {
       const items = [];
       document.querySelectorAll('table tr, .ps_grid-row').forEach((row, i) => {
@@ -1808,7 +1791,7 @@ async function fetchConnecticut(keywords) {
   const seen = new Set();
   for (const term of terms) {
     try {
-      const url = `https://ctsource.ct.gov/ctsource/solicitation/list?keyword=${encodeURIComponent(term)}&status=open`;
+      const url = `https://biznet.ct.gov/SCP_Search/Default.aspx?keyword=${encodeURIComponent(term)}&status=open`;
       const html = await scrapePage(url, `CT CTsource "${term}"`);
       const $ = cheerio.load(html);
       $('table tr, .solicitation-row').each((i, row) => {
@@ -1962,7 +1945,7 @@ const fetchNebraska    = makeStateScraper('NE','Nebraska',   'https://das.nebras
 const fetchMontana     = makeStateScraper('MT','Montana',    'https://vendor.mt.gov/SupplierPortal/public/index.html', '');
 const fetchNewMexico   = makeStateScraper('NM','New Mexico', 'https://www.generalservices.state.nm.us/state-purchasing/active-procurements/', '');
 const fetchIdaho       = makeStateScraper('ID','Idaho',      'https://purchasing.idaho.gov/current-solicitations/', '');
-const fetchWyoming     = makeStateScraper('WY','Wyoming',    'https://ai.wy.gov/GeneralServices/Procurement/bids.aspx', '');
+const fetchWyoming     = makeStateScraper('WY','Wyoming',    'https://disweb.wyo.gov/bids/BidSearch.aspx', '');
 const fetchAlaska      = makeStateScraper('AK','Alaska',     'https://aws.state.ak.us/OnlinePublicNotices/Notices/Search.aspx', '');
 const fetchHawaii      = makeStateScraper('HI','Hawaii',     'https://hiepro.ehawaii.gov/sea/app/home;jsessionid=', '');
 const fetchRhodeIsland = makeStateScraper('RI','Rhode Island','https://www.ridop.ri.gov/procurement-opportunities', '');
@@ -1986,14 +1969,18 @@ async function fetchSBASubNet(keywords) {
       const url = `https://subnet.sba.gov/client/dsp_Landing.cfm?action=search&keyword=${encodeURIComponent(term)}&state=0`;
       const html = await scrapePage(url, `SBA SUBNet "${term}"`);
       const $ = cheerio.load(html);
-      $('table tr').each((i, row) => {
+      // SubNet page structure: opportunities listed in table with specific column order
+      // Try multiple table selectors since layout varies
+      let rows = $('table.table tr, table#ctl00_ContentPlaceHolder1_GridView1 tr, table tr').toArray();
+      if (rows.length === 0) rows = $('tr').toArray();
+      rows.forEach((row, i) => {
         if (i === 0) return;
         const cells = $(row).find('td');
-        if (cells.length < 3) return;
-        const title = $(cells[0]).text().trim();
-        const company = $(cells[1]).text().trim();
-        const deadline = $(cells[2]).text().trim();
+        if (cells.length < 2) return;
         const anchor = $(row).find('a').first();
+        const title = anchor.text().trim() || $(cells[0]).text().trim();
+        const company = $(cells[cells.length > 3 ? 1 : 0]).text().trim();
+        const deadline = $(cells[cells.length-1]).text().trim();
         const link = anchor.attr('href') || '';
         if (!title || title.length < 5) return;
         const id = 'SUBNET-' + Buffer.from(title + company).toString('base64').slice(0,20);
