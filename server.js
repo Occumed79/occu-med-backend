@@ -10,6 +10,49 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 const SAM_KEY = process.env.SAM_API_KEY || '';
 
+// ── Upstash Redis Cache ───────────────────────────────────────────────────────
+// Free tier: 500K commands/month. Cache results for 6 hours — eliminates
+// rate limit hits, cold start wait, and Browserless credit burn on every refresh.
+const UPSTASH_URL   = process.env.UPSTASH_REDIS_REST_URL || '';
+const UPSTASH_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || '';
+const CACHE_TTL     = 6 * 60 * 60; // 6 hours in seconds
+
+async function cacheGet(key) {
+  if (!UPSTASH_URL) return null;
+  try {
+    const res = await fetch(`${UPSTASH_URL}/get/${encodeURIComponent(key)}`, {
+      headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` }
+    });
+    const json = await res.json();
+    if (!json.result) return null;
+    return JSON.parse(json.result);
+  } catch(e) { console.log(`  Cache GET error: ${e.message}`); return null; }
+}
+
+async function cacheSet(key, value, ttl = CACHE_TTL) {
+  if (!UPSTASH_URL) return;
+  try {
+    await fetch(`${UPSTASH_URL}/set/${encodeURIComponent(key)}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${UPSTASH_TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value: JSON.stringify(value), ex: ttl })
+    });
+  } catch(e) { console.log(`  Cache SET error: ${e.message}`); }
+}
+
+// Cached wrapper — checks cache first, fetches and stores if miss
+async function withCache(key, fetchFn, ttl = CACHE_TTL) {
+  const cached = await cacheGet(key);
+  if (cached !== null) {
+    console.log(`  [CACHE HIT] ${key} (${cached.length} items)`);
+    return cached;
+  }
+  console.log(`  [CACHE MISS] ${key} — fetching live`);
+  const data = await fetchFn();
+  await cacheSet(key, data, ttl);
+  return data;
+}
+
 app.use(cors({ origin: '*' }));
 app.use(express.json());
 
@@ -168,7 +211,7 @@ async function usaSpendingSearch({ awardTypeCodes, source, noticeType, baseType,
           classCode: '', baseType,
         });
       }
-    } catch (e) { console.error(`  ${label} batch error:`, e.message); }
+    } catch (e) { console.error(`  ${label} batch error: ${e.message || e.code || JSON.stringify(e)}`); }
   }
 
   console.log(`${label} total: ${results.length}`);
@@ -489,7 +532,41 @@ async function fetchFederalRegister() {
         req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
         req.end();
       });
-      if (status !== 200) { console.log(`  FedReg "${term}": HTTP ${status}`); continue; }
+      if (status !== 200) {
+        // 400 often means the date range is empty or term has special chars
+        // Try without date filter as fallback
+        console.log(`  FedReg "${term}": HTTP ${status} — retrying without date filter`);
+        try {
+          const frQueryFallback = [
+            'per_page=20', 'order=newest',
+            'fields[]=title', 'fields[]=document_number', 'fields[]=publication_date',
+            'fields[]=type', 'fields[]=abstract', 'fields[]=html_url',
+            'fields[]=agencies', 'fields[]=effective_on', 'fields[]=comment_date',
+            `conditions[term]=${encodeURIComponent(term)}`,
+            'conditions[type][]=RULE', 'conditions[type][]=PRORULE', 'conditions[type][]=NOTICE'
+          ].join('&');
+          const { status: s2, data: d2 } = await new Promise((res2, rej2) => {
+            const r2 = https.request({
+              hostname: 'www.federalregister.gov', path: '/api/v1/documents.json?' + frQueryFallback,
+              method: 'GET', headers: { 'Accept': 'application/json' }, timeout: 20000
+            }, (resp) => {
+              let raw2 = ''; resp.on('data', d => raw2 += d);
+              resp.on('end', () => { try { res2({ status: resp.statusCode, data: JSON.parse(raw2) }); } catch(e) { rej2(e); } });
+            });
+            r2.on('error', rej2); r2.on('timeout', () => { r2.destroy(); rej2(new Error('timeout')); }); r2.end();
+          });
+          if (s2 === 200) {
+            const docs2 = d2.results || [];
+            console.log(`  FedReg "${term}" fallback: ${docs2.length} results`);
+            for (const d of docs2) {
+              const id = 'FEDREG-' + (d.document_number || Math.random());
+              if (seen.has(id)) continue; seen.add(id);
+              results.push({ id, source:'FEDREG', title:'[REG ALERT] '+(d.title||''), agency:(Array.isArray(d.agencies)?d.agencies.map(a=>a.name||a.raw_name||'').filter(Boolean).join(', '):'') || 'Federal Agency', subAgency:'', office:'', solNum:d.document_number||'', noticeId:d.document_number||'', noticeType:d.type==='PRORULE'?'Proposed Rule':d.type==='RULE'?'Final Rule':'Federal Notice', naicsCode:'621111', naicsDesc:'Occupational Medicine', setAside:'', setAsideCode:'', postedDate:d.publication_date||null, deadline:d.effective_on||d.comment_date||null, archiveDate:null, active:true, state:'', city:'', desc:d.abstract||d.excerpts||'', uiLink:d.html_url||'https://www.federalregister.gov', contact:'', awardAmount:0, recipient:'', classCode:'', baseType:'Regulatory Notice' });
+            }
+          }
+        } catch(e2) { console.error(`  FedReg fallback error: ${e2.message}`); }
+        continue;
+      }
       const docs = data.results || [];
       console.log(`  FedReg "${term}": ${docs.length} results`);
       for (const d of docs) {
@@ -560,39 +637,43 @@ async function fetchTexasESBD(keywords) {
     const url = `https://www.txsmartbuy.gov/esbd?keyword=${encodeURIComponent(term)}&status=Open`;
     const rows = await scrapeWithPuppeteer(url, () => {
       const items = [];
-      // TX ESBD renders data into various possible containers
-      const selectors = [
+      // TX ESBD (txsmartbuy.gov) is a React app — data renders into various containers
+      // Try multiple selector strategies
+      const trySelectors = [
+        '.results-list .result-item',
+        '.bid-list li',
+        '[data-testid="opportunity-row"]',
         'table tbody tr',
-        '.esbd-results tr',
-        '[class*="result"] tr',
-        '.grid tr',
-        'tr[data-key]',
-        'tbody tr'
+        '.MuiTableRow-root',
+        '.opportunity-card',
+        'tbody tr',
+        'tr'
       ];
       let found = [];
-      for (const sel of selectors) {
+      for (const sel of trySelectors) {
         const els = document.querySelectorAll(sel);
-        if (els.length > 1) { found = Array.from(els); break; }
+        if (els.length > 0) { found = Array.from(els); break; }
       }
-      if (!found.length) found = Array.from(document.querySelectorAll('tr'));
       found.forEach((row, i) => {
         if (i === 0) return;
-        const cells = row.querySelectorAll('td');
-        if (cells.length < 2) return;
+        const cells = row.querySelectorAll('td, .cell, [class*="cell"]');
         const anchor = row.querySelector('a');
-        const title = (anchor?.textContent || cells[0]?.textContent || '').trim();
-        const agency = (cells[1]?.textContent || '').trim();
-        const deadline = (cells[cells.length-1]?.textContent || '').trim();
+        const title = (
+          row.querySelector('[class*="title"], [class*="Title"], h2, h3, h4')?.textContent ||
+          anchor?.textContent ||
+          cells[0]?.textContent || ''
+        ).trim();
+        const agency = (cells[1]?.textContent || row.querySelector('[class*="agency"], [class*="Agency"]')?.textContent || '').trim();
+        const deadline = (cells[cells.length-1]?.textContent || row.querySelector('[class*="date"], [class*="Date"]')?.textContent || '').trim();
         const link = anchor?.href || '';
-        if (title && title.length > 5 && !title.includes('No results') && !title.includes('Sign in'))
+        if (title && title.length > 5 && !title.includes('No results') && !title.includes('Sign in') && !title.includes('Loading'))
           items.push({ title, agency, deadline, link });
       });
-      // Also log page structure for debugging
-      items._pageTitle = document.title;
-      items._bodySnippet = document.body?.innerText?.slice(0, 200) || '';
+      // Capture page text for debugging
+      items._snippet = (document.body?.innerText || '').slice(0, 300);
       return items;
     }, `TX ESBD "${term}"`);
-    if (rows._bodySnippet) console.log(`  TX page snippet: ${rows._bodySnippet.slice(0,100)}`);
+    if (rows._snippet) console.log(`  TX ESBD snippet: ${(rows._snippet||'').slice(0,150).replace(/\n/g,' ')}`);
 
     for (const r of rows) {
       const id = 'TX-' + Buffer.from(r.title).toString('base64').slice(0, 20);
@@ -621,7 +702,7 @@ async function fetchVirginiaEVA(keywords) {
   const seen = new Set();
 
   for (const term of terms) {
-    const url = `https://eva.virginia.gov/pages/eva-vendor-search-main-page.html#vendorSearch`;
+    const url = `https://eva.virginia.gov/bso/external/publicBids.sdo?keyword=${encodeURIComponent(term)}&status=OPEN`;
     const rows = await scrapeWithPuppeteer(url, (searchTerm) => {
       // Wait for search box and trigger search
       const items = [];
@@ -663,17 +744,27 @@ async function fetchColorado(keywords) {
 
   const rows = await scrapeWithPuppeteer(url, () => {
     const items = [];
-    document.querySelectorAll('table tr, .views-row, tr.odd, tr.even').forEach((row, i) => {
-      if (i === 0) return;
+    // Try multiple selector strategies for Colorado OSC (Drupal-based)
+    const containers = document.querySelectorAll(
+      '.view-content .views-row, table tbody tr, .views-row, tr.odd, tr.even, ' +
+      '.views-table tbody tr, article, .solicitation-item'
+    );
+    containers.forEach((row, i) => {
       const anchor = row.querySelector('a');
-      const title = anchor?.textContent?.trim() || row.querySelector('td')?.textContent?.trim();
-      const agency = row.querySelectorAll('td')[1]?.textContent?.trim() || '';
-      const deadline = row.querySelector('td:last-child')?.textContent?.trim() || '';
+      const title = (
+        anchor?.textContent ||
+        row.querySelector('td:first-child, .views-field-title, h3, h4')?.textContent ||
+        row.querySelector('td')?.textContent || ''
+      ).trim();
+      const agency = (row.querySelector('td:nth-child(2), .views-field-field-agency')?.textContent || '').trim();
+      const deadline = (row.querySelector('td:last-child, .views-field-field-close-date')?.textContent || '').trim();
       const link = anchor?.href || '';
-      if (title && title.length > 5) items.push({ title, agency, deadline, link });
+      if (title && title.length > 5 && !title.match(/^\s*$/)) items.push({ title, agency, deadline, link });
     });
+    items._snippet = (document.body?.innerText || '').slice(0, 400);
     return items;
   }, 'CO OSC');
+  if (rows._snippet) console.log('  CO OSC snippet:', (rows._snippet||'').slice(0,200).replace(/\n/g,' '));
 
   const results = [];
   const seen = new Set();
@@ -705,7 +796,7 @@ async function fetchGeorgia(keywords) {
   const seen = new Set();
 
   for (const term of terms) {
-    const url = `https://ssl.doas.state.ga.us/PRSapp/PR_Search_Results.jsp?searchText=${encodeURIComponent(term)}&statusCode=A&agencyID=0`;
+    const url = `https://ssl.doas.state.ga.us/PRSapp/PR_index.jsp`;
     const rows = await scrapeWithPuppeteer(url, () => {
       const items = [];
       document.querySelectorAll('table tr, tr.dataRow, tr.altRow').forEach((row, i) => {
@@ -744,6 +835,154 @@ async function fetchGeorgia(keywords) {
 
 
 // ── Generic static page fetcher (for CFM/ASP sites) ─────────────────────────
+
+// ── SELF-HEALING SCRAPER ──────────────────────────────────────────────────────
+// When any cheerio scraper returns 0 results, this agent:
+//   1. Takes a snippet of the raw HTML
+//   2. Sends it to Claude with context about what we're trying to extract
+//   3. Gets back a CSS selector strategy
+//   4. Retries extraction with the new selectors
+//   5. Logs the fix so we can make it permanent
+const GEMINI_KEY = process.env.GEMINI_API_KEY || '';
+
+async function selfHealScraper(html, label, stateCode) {
+  if (!GEMINI_KEY) {
+    console.log(`  [SELF-HEAL] No GEMINI_API_KEY set, skipping`);
+    return null;
+  }
+  if (!html || html.length < 100) return null;
+
+  // Send a focused slice of HTML — enough to understand structure, not too many tokens
+  const htmlSlice = html.slice(0, 8000);
+
+  console.log(`  [SELF-HEAL] ${label}: 0 results — asking Claude to analyze structure...`);
+
+  try {
+    const prompt = `You are analyzing HTML from a U.S. government procurement portal (${label}) to extract bid/solicitation listings.
+
+The scraper returned 0 results. Analyze this HTML and return a JSON object with the best selectors to extract procurement opportunities.
+
+HTML:
+\`\`\`html
+${htmlSlice}
+\`\`\`
+
+Return ONLY valid JSON with this exact structure (no markdown, no explanation):
+{
+  "containerSelector": "CSS selector for each row/item containing one opportunity",
+  "titleSelector": "CSS selector relative to container for the title/name",
+  "agencySelector": "CSS selector relative to container for the agency name",
+  "deadlineSelector": "CSS selector relative to container for the deadline/date",
+  "linkSelector": "CSS selector relative to container for the link (a tag)",
+  "notes": "brief explanation of what you found",
+  "hasData": true/false
+}
+
+If there are no procurement listings visible (login wall, error page, empty results), set hasData to false.`;
+
+    const resp = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${GEMINI_KEY}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { maxOutputTokens: 400, temperature: 0 }
+        })
+      }
+    );
+
+    const data = await resp.json();
+    const raw = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    const clean = raw.replace(/```json|```/g, '').trim();
+    const selectors = JSON.parse(clean);
+
+    if (!selectors.hasData) {
+      console.log(`  [SELF-HEAL] ${label}: Claude says no data visible (${selectors.notes})`);
+      return null;
+    }
+
+    console.log(`  [SELF-HEAL] ${label}: Claude suggests: ${selectors.containerSelector} (${selectors.notes})`);
+    return selectors;
+  } catch(e) {
+    console.error(`  [SELF-HEAL] ${label}: Claude analysis failed: ${e.message}`);
+    return null;
+  }
+}
+
+// Apply healed selectors to re-extract from HTML
+function applyHealedSelectors(html, selectors, label, stateCode, baseUrl) {
+  const results = [];
+  const seen = new Set();
+  try {
+    const $ = cheerio.load(html);
+    $(selectors.containerSelector).each((i, el) => {
+      if (i === 0 && $(el).find('th').length > 0) return; // skip header rows
+      const title = ($(el).find(selectors.titleSelector).first().text() || '').trim();
+      const agency = ($(el).find(selectors.agencySelector).first().text() || '').trim();
+      const deadline = ($(el).find(selectors.deadlineSelector).first().text() || '').trim();
+      const anchor = $(el).find(selectors.linkSelector).first();
+      const link = anchor.attr('href') || '';
+      if (!title || title.length < 5) return;
+      const id = stateCode + '-HEALED-' + Buffer.from(title).toString('base64').slice(0, 16);
+      if (seen.has(id)) return; seen.add(id);
+      results.push({
+        id, source: 'STATE-' + stateCode, title,
+        agency: agency || label + ' Agency',
+        subAgency: '', office: '', solNum: '', noticeId: id,
+        noticeType: 'State Solicitation', naicsCode: '621111', naicsDesc: '',
+        setAside: '', setAsideCode: '', postedDate: null,
+        deadline: deadline || null, archiveDate: null, active: true,
+        state: stateCode, city: '', desc: '',
+        uiLink: link.startsWith('http') ? link : (baseUrl + link),
+        contact: '', awardAmount: 0, recipient: '', classCode: '', baseType: 'State Bid'
+      });
+    });
+    console.log(`  [SELF-HEAL] ${label}: Re-extracted ${results.length} results with healed selectors`);
+  } catch(e) {
+    console.error(`  [SELF-HEAL] Apply error: ${e.message}`);
+  }
+  return results;
+}
+
+// Wrapper: scrape, and if 0 results, try self-healing
+async function scrapePageHealing(url, label, stateCode, parseHtml) {
+  const cacheKey = 'scrape:' + stateCode + ':' + Buffer.from(url).toString('base64').slice(0, 20);
+
+  // Check cache first
+  const cached = await cacheGet(cacheKey);
+  if (cached !== null) {
+    console.log(`  [CACHE HIT] ${label}`);
+    return cached;
+  }
+
+  let html;
+  try {
+    html = await scrapePage(url, label);
+  } catch(e) {
+    console.error(`  ${label} fetch error: ${e.message}`);
+    return [];
+  }
+
+  // Try normal parse first
+  let results = [];
+  try { results = parseHtml(html); } catch(e) {}
+
+  // If 0 results, ask Claude to heal
+  if (results.length === 0 && html.length > 500) {
+    const selectors = await selfHealScraper(html, label, stateCode);
+    if (selectors) {
+      const baseUrl = new URL(url).origin;
+      results = applyHealedSelectors(html, selectors, label, stateCode, baseUrl);
+    }
+  }
+
+  // Cache results (even empty, for 1 hour to avoid hammering failed sites)
+  const ttl = results.length > 0 ? CACHE_TTL : 3600;
+  await cacheSet(cacheKey, results, ttl);
+  return results;
+}
+
 function scrapePage(url, label) {
   return new Promise((resolve, reject) => {
     const u = new URL(url);
@@ -773,8 +1012,9 @@ async function fetchLouisiana(keywords) {
 
   for (const term of terms) {
     try {
-      const url = `https://wwwcfprd.doa.louisiana.gov/osp/lapac/srchopen.cfm?deptno=all&catno=all&dateStart=&dateEnd=&compareDate=O&keywords=${encodeURIComponent(term)}&keywordsCheck=all`;
+      const url = `https://lagovpsprd.doa.louisiana.gov/osp/lapac/srchopen.cfm?deptno=all&catno=all&dateStart=&dateEnd=&compareDate=O&keywords=${encodeURIComponent(term)}&keywordsCheck=all`;
       const html = await scrapePage(url, `LA LaPAC "${term}"`);
+      if (!html || html.length < 200) { console.error('  LA: empty response'); continue; }
       const $ = cheerio.load(html);
 
       // LaPAC: skip the search form table, only parse results table
@@ -825,8 +1065,9 @@ async function fetchMississippi(keywords) {
 
   for (const term of terms) {
     try {
-      const url = `https://www.ms.gov/dfa/contract_bid_search/Bid/BidSearch?keyword=${encodeURIComponent(term)}&status=0`;
+      const url = `https://www.ms.gov/dfa/contract_bid_search/Bid/BidSearch?keyword=${encodeURIComponent(term)}&status=open`;
       const html = await scrapePage(url, `MS "${term}"`);
+      if (!html || html.length < 200) { console.error('  MS: empty response'); continue; }
       const $ = cheerio.load(html);
 
       $('table tr').each((i, row) => {
@@ -1891,12 +2132,39 @@ app.get('/api/subawards',   async (req, res) => { try { res.json({ success:true,
 app.get('/api/grants',      async (req, res) => { try { res.json({ success:true, data: await fetchGrants(parseInt(req.query.days)||90, parseKeywords(req)) }); }                        catch(e) { res.status(500).json({ success:false, error:e.message, data:[] }); } });
 app.get('/api/subnet',   async (req, res) => { try { res.json({ success:true, data: await fetchSBASubNet(parseKeywords(req)) }); } catch(e) { res.status(500).json({ success:false, error:e.message, data:[] }); } });
 app.get('/api/bonfire',  async (req, res) => { try { res.json({ success:true, data: await fetchBonfire(parseKeywords(req)) }); }          catch(e) { res.status(500).json({ success:false, error:e.message, data:[] }); } });
+app.get('/api/cache-status', async (req, res) => {
+  try {
+    const key = `opportunities:90:`;
+    const cached = await cacheGet(key);
+    res.json({
+      cacheAvailable: !!UPSTASH_URL,
+      hasData: cached !== null,
+      itemCount: cached ? cached.total : 0,
+      cachedAt: cached ? cached.cachedAt : null,
+      upstashConfigured: !!(UPSTASH_URL && UPSTASH_TOKEN),
+      aiConfigured: !!GEMINI_KEY, aiProvider: 'Google Gemini (free)',
+    });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/fpds',      async (req, res) => { try { res.json({ success:true, data: await fetchFPDS() }); }                                              catch(e) { res.status(500).json({ success:false, error:e.message, data:[] }); } });
 app.get('/api/sbir',        async (req, res) => { try { res.json({ success:true, data: await fetchSBIR() }); }                                                                           catch(e) { res.status(500).json({ success:false, error:e.message, data:[] }); } });
 
 app.get('/api/opportunities', async (req, res) => {
   const days = parseInt(req.query.days) || 90;
   const kw = parseKeywords(req);
+  const forceRefresh = req.query.refresh === 'true';
+  const cacheKey = `opportunities:${days}:${kw.join(',')}`;
+
+  // Serve from cache if available and not a forced refresh
+  if (!forceRefresh) {
+    const cached = await cacheGet(cacheKey);
+    if (cached) {
+      console.log(`[CACHE] Serving ${cached.total} opportunities from cache (${cached.cachedAt})`);
+      return res.json({ ...cached, fromCache: true });
+    }
+  }
+
   const [samR, usaR, idvR, subR, grantR, sbirR, tangoR, fedregR, statesR, fpdsR] = await Promise.allSettled([
     fetchSAM(), fetchUSASpending(days, kw), fetchIDV(days, kw), fetchSubawards(days, kw),
     fetchGrants(days, kw), fetchSBIR(), fetchTango(), fetchFederalRegister(), fetchStateBids(kw), fetchFPDS()
@@ -1904,7 +2172,7 @@ app.get('/api/opportunities', async (req, res) => {
   const get = r => r.status === 'fulfilled' ? r.value : [];
   const err = (lbl, r) => r.status === 'rejected' ? [`${lbl}: ${r.reason?.message}`] : [];
   const all = [...get(samR),...get(usaR),...get(idvR),...get(subR),...get(grantR),...get(sbirR),...get(tangoR),...get(fedregR),...get(statesR),...get(fpdsR)];
-  res.json({
+  const payload = {
     success: true, total: all.length,
     samCount: get(samR).length, usaCount: get(usaR).length,
     idvCount: get(idvR).length, subCount: get(subR).length,
@@ -1912,8 +2180,11 @@ app.get('/api/opportunities', async (req, res) => {
     tangoCount: get(tangoR).length, fedregCount: get(fedregR).length,
     statesCount: get(statesR).length,
     errors: [...err('SAM',samR),...err('USASpending',usaR),...err('IDV',idvR),...err('Subawards',subR),...err('Grants',grantR),...err('SBIR',sbirR),...err('Tango',tangoR),...err('FedReg',fedregR),...err('States',statesR)],
-    data: all
-  });
+    data: all, cachedAt: new Date().toISOString()
+  };
+  // Store in cache — only if we got meaningful results
+  if (all.length > 10) await cacheSet(cacheKey, payload);
+  res.json(payload);
 });
 
 
@@ -2005,6 +2276,25 @@ app.get('/api/teaming', async (req, res) => {
     res.status(500).json({ success: false, error: e.message, data: [] });
   }
 });
+
+// ── Background Auto-Refresh ──────────────────────────────────────────────────
+// Pre-fetches all sources every 6 hours so cache is always warm.
+// Portal loads instantly instead of triggering a 2-3 min live fetch.
+async function backgroundRefresh() {
+  console.log('\n[BG REFRESH] Starting scheduled refresh...');
+  try {
+    const baseUrl = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
+    const resp = await fetch(`${baseUrl}/api/opportunities?days=90&refresh=true`);
+    const data = await resp.json();
+    console.log(`[BG REFRESH] Complete — ${data.total || 0} opportunities cached`);
+  } catch(e) {
+    console.error(`[BG REFRESH] Failed: ${e.message}`);
+  }
+}
+
+// Run immediately on startup, then every 6 hours
+setTimeout(backgroundRefresh, 30000); // 30s after boot (let server stabilize)
+setInterval(backgroundRefresh, 6 * 60 * 60 * 1000);
 
 // ── Keep-alive ping (prevents Render free tier from sleeping) ────────────────
 const RENDER_URL = process.env.RENDER_EXTERNAL_URL || '';
