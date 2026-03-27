@@ -3,6 +3,7 @@ const cors = require('cors');
 const https = require('https');
 const cheerio = require('cheerio');
 const puppeteer = require('puppeteer-core');
+const safeFetch = globalThis.fetch ? globalThis.fetch.bind(globalThis) : require('node-fetch');
 
 require('dotenv').config({ path: './Env' });
 
@@ -20,7 +21,7 @@ const CACHE_TTL     = 6 * 60 * 60; // 6 hours in seconds
 async function cacheGet(key) {
   if (!UPSTASH_URL) return null;
   try {
-    const res = await fetch(`${UPSTASH_URL}/get/${encodeURIComponent(key)}`, {
+    const res = await safeFetch(`${UPSTASH_URL}/get/${encodeURIComponent(key)}`, {
       headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` }
     });
     const json = await res.json();
@@ -32,7 +33,7 @@ async function cacheGet(key) {
 async function cacheSet(key, value, ttl = CACHE_TTL) {
   if (!UPSTASH_URL) return;
   try {
-    await fetch(`${UPSTASH_URL}/set/${encodeURIComponent(key)}`, {
+    await safeFetch(`${UPSTASH_URL}/set/${encodeURIComponent(key)}`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${UPSTASH_TOKEN}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ value: JSON.stringify(value), ex: ttl })
@@ -878,7 +879,7 @@ Return ONLY valid JSON with this exact structure (no markdown, no explanation):
 
 If there are no procurement listings visible (login wall, error page, empty results), set hasData to false.`;
 
-    const resp = await fetch(
+    const resp = await safeFetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${GEMINI_KEY}`,
       {
         method: 'POST',
@@ -2271,7 +2272,7 @@ async function backgroundRefresh() {
   console.log('\n[BG REFRESH] Starting scheduled refresh...');
   try {
     const baseUrl = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
-    const resp = await fetch(`${baseUrl}/api/opportunities?days=90&refresh=true`);
+    const resp = await safeFetch(`${baseUrl}/api/opportunities?days=90&refresh=true`);
     const data = await resp.json();
     console.log(`[BG REFRESH] Complete — ${data.total || 0} opportunities cached`);
   } catch(e) {
@@ -2296,7 +2297,7 @@ if (RENDER_URL) {
 }
 
 app.listen(PORT, () => {
-  console.log(`\nOccu-Med Backend v4.0 running on port ${PORT}`);
+  console.log(`\nOccu-Med Backend v5.0 running on port ${PORT}`);
   console.log(`SAM API key: ${SAM_KEY ? SAM_KEY.slice(0,12)+'...' : 'NOT SET'}`);
   console.log(`Sources: 8 Federal APIs + ALL 50 States\n`);
 });
