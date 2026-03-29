@@ -220,7 +220,7 @@ async function usaSpendingSearch({ awardTypeCodes, source, noticeType, baseType,
         'Description', 'Start Date', 'End Date',
         'Place of Performance State Code', 'Place of Performance City Name'
       ],
-      sort: 'Start Date', order: 'desc', limit: 50, page: 1, subawards: false
+      sort: 'action_date', order: 'desc', limit: 50, page: 1, subawards: false
     });
 
     try {
@@ -561,7 +561,7 @@ async function fetchFederalRegister() {
 
   // Date formatted as MM/DD/YYYY — safer for Federal Register API (avoids 400 on ISO format)
   const d30 = new Date(); d30.setDate(d30.getDate() - 30);
-  const dateStr = `${d30.getMonth()+1}/${d30.getDate()}/${d30.getFullYear()}`;
+  const dateStr = d30.toISOString().split('T')[0]; // YYYY-MM-DD required by Federal Register API
 
   for (const term of terms) {
     // Strip literal quotes from term — encoding issues cause 400s
@@ -571,12 +571,8 @@ async function fetchFederalRegister() {
       // Use safeFetch — federalregister.gov handles standard percent-encoding fine
       const url = `https://www.federalregister.gov/api/v1/documents.json` +
         `?per_page=20&order=newest` +
-        `&fields[]=title&fields[]=document_number&fields[]=publication_date` +
-        `&fields[]=type&fields[]=abstract&fields[]=html_url` +
-        `&fields[]=agencies&fields[]=effective_on&fields[]=comment_date` +
         `&conditions[term]=${encodeURIComponent(safeTerm)}` +
-        `&conditions[publication_date][gte]=${encodeURIComponent(dateStr)}` +
-        `&conditions[type][]=RULE&conditions[type][]=PRORULE&conditions[type][]=NOTICE`;
+        `&conditions[publication_date][gte]=${dateStr}`;
 
       const res = await safeFetch(url, { headers: { 'Accept': 'application/json' } });
       if (!res.ok) {
@@ -852,7 +848,6 @@ app.get('/api/cache-status', async (req, res) => {
 
 app.get('/api/socrata',    async (req, res) => { try { res.json({ success:true, data: await fetchSocrata() }); }    catch(e) { res.status(500).json({ success:false, error:e.message, data:[] }); } });
 app.get('/api/ckan',       async (req, res) => { try { res.json({ success:true, data: await fetchCKAN() }); }      catch(e) { res.status(500).json({ success:false, error:e.message, data:[] }); } });
-app.get('/api/fpds',      async (req, res) => { try { res.json({ success:true, data: await fetchFPDS() }); }                                              catch(e) { res.status(500).json({ success:false, error:e.message, data:[] }); } });
 app.get('/api/sbir',        async (req, res) => { try { res.json({ success:true, data: await fetchSBIR() }); }                                                                           catch(e) { res.status(500).json({ success:false, error:e.message, data:[] }); } });
 
 // ── In-memory fallback when Redis is unavailable ──────────────────────────────
@@ -1000,7 +995,6 @@ async function backgroundRefresh() {
       { key: 'opp:grants',     fn: () => fetchGrants(days, kw) },
       { key: 'opp:tango',      fn: () => fetchTango() },
       { key: 'opp:fedreg',     fn: () => fetchFederalRegister() },
-      { key: 'opp:fpds',       fn: () => fetchFPDS() },
       { key: 'opp:subawards',  fn: () => fetchSubawards(days, kw) },
       { key: 'opp:socrata',    fn: () => fetchSocrata() },
       { key: 'opp:ckan',       fn: () => fetchCKAN() },
