@@ -220,7 +220,7 @@ async function usaSpendingSearch({ awardTypeCodes, source, noticeType, baseType,
         'Description', 'Start Date', 'End Date',
         'Place of Performance State Code', 'Place of Performance City Name'
       ],
-      sort: 'action_date', order: 'desc', limit: 50, page: 1, subawards: false
+      sort: 'Start Date', order: 'desc', limit: 50, page: 1, subawards: false
     });
 
     try {
