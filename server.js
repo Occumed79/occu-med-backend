@@ -24,7 +24,10 @@ async function cacheGet(key) {
     const res = await safeFetch(`${UPSTASH_URL}/get/${encodeURIComponent(key)}`, {
       headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` }
     });
-    const json = await res.json();
+    if (!res.ok) return null;
+    const text = await res.text();
+    if (!text || text.startsWith('<')) return null;
+    const json = JSON.parse(text);
     if (!json.result) return null;
     return JSON.parse(json.result);
   } catch(e) { console.log(`  Cache GET error: ${e.message}`); return null; }
@@ -315,7 +318,7 @@ async function fetchSubawards(daysBack = 90, extraKeywords = []) {
       filters: {
         time_period: [{ start_date: start, end_date: end }],
         keywords: batch,
-        award_type_codes: ['02', '03', '04', '05', '06', '07', '08', '09', '10', '11'],
+        award_type_codes: ['A', 'B', 'C', 'D'],
       },
       fields: [
         'Sub-Award ID', 'Sub-Award Type', 'Sub-Awardee Name', 'Sub-Award Date',
