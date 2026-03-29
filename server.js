@@ -364,7 +364,7 @@ async function fetchSubawards(daysBack = 90, extraKeywords = []) {
         'Sub-Award ID', 'Sub-Award Type', 'Sub-Awardee Name', 'Sub-Award Date',
         'Sub-Award Amount', 'Awarding Agency', 'Sub-Award Description'
       ],
-      sort: 'Sub-Award Amount', order: 'desc', limit: 50, page: 1
+      sort: 'Action Date', order: 'desc', limit: 50, page: 1
     });
 
     try {
@@ -556,49 +556,35 @@ async function fetchTango() {
 
 async function fetchFederalRegister() {
   const terms = ['occupational medical surveillance', 'hearing conservation', 'respirator medical evaluation', 'fit for duty', 'deployment health assessment'];
-  const agencies = ['occupational-safety-and-health-administration', 'defense-department', 'health-and-human-services-department'];
   const results = [];
   const seen = new Set();
-  const today = new Date();
-  const from = new Date(); from.setDate(from.getDate() - 90);
-  const fmt = d => d.toISOString().split('T')[0];
+
+  // Date formatted as MM/DD/YYYY — safer for Federal Register API (avoids 400 on ISO format)
+  const d30 = new Date(); d30.setDate(d30.getDate() - 30);
+  const dateStr = `${d30.getMonth()+1}/${d30.getDate()}/${d30.getFullYear()}`;
 
   for (const term of terms) {
-    // Federal Register API — must use literal brackets, not %5B%5D encoded
-    const frBase = 'https://www.federalregister.gov/api/v1/documents.json';
-    // Note: bracket params MUST remain literal (not %5B%5D encoded)
-    // Date filter removed from primary query as it causes intermittent 400s
-    const frQuery = [
-      'per_page=20', 'order=newest',
-      'fields[]=title', 'fields[]=document_number', 'fields[]=publication_date',
-      'fields[]=type', 'fields[]=abstract', 'fields[]=html_url',
-      'fields[]=agencies', 'fields[]=effective_on', 'fields[]=comment_date',
-      `conditions[term]=${encodeURIComponent(term)}`,
-      'conditions[type][]=RULE', 'conditions[type][]=PRORULE', 'conditions[type][]=NOTICE'
-    ].join('&');
-    const url = `${frBase}?${frQuery}`;
-    console.log(`\nFetching Federal Register: "${term}"...`);
+    // Strip literal quotes from term — encoding issues cause 400s
+    const safeTerm = term.replace(/"/g, '');
+    console.log(`\nFetching Federal Register: "${safeTerm}"...`);
     try {
-      // Use https.request directly to preserve literal brackets in query string
-      const { status, data } = await new Promise((resolve, reject) => {
-        const req = https.request({
-          hostname: 'www.federalregister.gov',
-          path: '/api/v1/documents.json?' + frQuery,
-          method: 'GET',
-          headers: { 'Accept': 'application/json' },
-          timeout: 20000
-        }, (res) => {
-          let raw = ''; res.on('data', d => raw += d);
-          res.on('end', () => { try { resolve({ status: res.statusCode, data: JSON.parse(raw) }); } catch(e) { reject(e); } });
-        });
-        req.on('error', reject);
-        req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
-        req.end();
-      });
-      if (status !== 200) {
-        console.log(`  FedReg "${term}": HTTP ${status} — skipping`);
+      // Use safeFetch — federalregister.gov handles standard percent-encoding fine
+      const url = `https://www.federalregister.gov/api/v1/documents.json` +
+        `?per_page=20&order=newest` +
+        `&fields[]=title&fields[]=document_number&fields[]=publication_date` +
+        `&fields[]=type&fields[]=abstract&fields[]=html_url` +
+        `&fields[]=agencies&fields[]=effective_on&fields[]=comment_date` +
+        `&conditions[term]=${encodeURIComponent(safeTerm)}` +
+        `&conditions[publication_date][gte]=${encodeURIComponent(dateStr)}` +
+        `&conditions[type][]=RULE&conditions[type][]=PRORULE&conditions[type][]=NOTICE`;
+
+      const res = await safeFetch(url, { headers: { 'Accept': 'application/json' } });
+      if (!res.ok) {
+        console.log(`  FedReg "${safeTerm}": HTTP ${res.status} — skipping`);
         continue;
       }
+      const data = await res.json();
+      const status = res.status;
       const docs = data.results || [];
       console.log(`  FedReg "${term}": ${docs.length} results`);
       for (const d of docs) {
@@ -631,10 +617,179 @@ async function fetchFederalRegister() {
 }
 
 
-// Puppeteer semaphore — max 1 concurrent connection, 4s delay between calls
-// Prevents Browserless free tier 429s from concurrent requests
+// ── Socrata Open Data API (SODA) ─────────────────────────────────────────────
+// Uses the Socrata Discovery API to search ALL Socrata portals at once.
+// One call hits: NYC, Chicago, Texas, LA, SF, Seattle, Philly, Baltimore,
+// Miami-Dade, Cook County, Nashville, Maryland, NY State, CA, TX, IL, etc.
+// Register free at dev.socrata.com for SOCRATA_APP_TOKEN (removes rate limits).
+const SOCRATA_TOKEN = process.env.SOCRATA_APP_TOKEN || '';
 
-// ── State scraping removed ────────────────────────────────────────────────────
+async function fetchSocrata() {
+  const results = [];
+  const seen = new Set();
+
+  // Socrata Discovery API searches across ALL Socrata portals simultaneously
+  // Filter to US government domains only (skip international noise)
+  const usDomains = [
+    'data.cityofnewyork.us', 'data.cityofchicago.org', 'data.texas.gov',
+    'data.lacity.org', 'data.sfgov.org', 'data.austintexas.gov',
+    'data.seattle.gov', 'data.phila.gov', 'data.baltimorecity.gov',
+    'data.miamidade.gov', 'data.cookcountyil.gov', 'data.montgomerycountymd.gov',
+    'data.nashville.gov', 'data.brla.gov', 'data.kcmo.org',
+    'opendata.maryland.gov', 'data.ny.gov', 'data.ca.gov',
+    'data.illinois.gov', 'data.michigan.gov', 'data.pa.gov',
+    'data.colorado.gov', 'data.oregon.gov', 'data.utah.gov',
+    'data.iowa.gov', 'data.ct.gov', 'data.ok.gov', 'data.mo.gov',
+    'data.hawaii.gov', 'data.smcgov.org', 'data.cincinnati-oh.gov',
+    'opendata.lasvegasnevada.gov'
+  ].join(',');
+
+  // Occu-Med procurement search terms
+  const searchTerms = [
+    'medical surveillance occupational',
+    'health screening solicitation',
+    'DOT physical examination',
+    'fit for duty medical',
+    'occupational health services bid',
+    'pre-employment medical',
+  ];
+
+  for (const term of searchTerms) {
+    try {
+      // Discovery API: searches dataset names, descriptions, and column names
+      const url = `https://api.us.socrata.com/api/catalog/v1` +
+        `?q=${encodeURIComponent(term)}` +
+        `&domains=${encodeURIComponent(usDomains)}` +
+        `&categories=Government%2CPublic+Safety%2CHealth` +
+        `&limit=20&offset=0`;
+
+      const headers = { 'Accept': 'application/json' };
+      if (SOCRATA_TOKEN) headers['X-App-Token'] = SOCRATA_TOKEN;
+
+      const res = await safeFetch(url, { headers });
+      if (!res.ok) { console.log(`  Socrata Discovery "${term}": HTTP ${res.status}`); continue; }
+      const json = await res.json();
+      const datasets = json.results || [];
+      console.log(`  Socrata Discovery "${term}": ${datasets.length} datasets`);
+
+      for (const ds of datasets) {
+        const meta = ds.resource || {};
+        const title = meta.name || '';
+        if (!title || title.length < 5) continue;
+
+        // Must look like a procurement/solicitation dataset
+        const desc = (meta.description || '').toLowerCase();
+        const lTitle = title.toLowerCase();
+        const isProcurement = ['solicitation','bid','rfp','rfq','contract','procurement','award','purchase']
+          .some(kw => lTitle.includes(kw) || desc.includes(kw));
+        if (!isProcurement) continue;
+
+        const domain = ds.metadata?.domain || '';
+        const id4 = meta.id || '';
+        const rawId = `SOCRATA-${id4}`;
+        if (seen.has(rawId)) continue; seen.add(rawId);
+
+        const link = meta.permalink || `https://${domain}/d/${id4}`;
+        const dataLink = `https://${domain}/resource/${id4}.json`;
+
+        results.push({
+          id: rawId, source: 'SOCRATA',
+          title,
+          agency: ds.classification?.domain_category || domain || 'Municipal Government',
+          subAgency: '', office: '', solNum: id4,
+          noticeId: rawId, noticeType: 'Municipal Solicitation',
+          naicsCode: '621111', naicsDesc: '',
+          setAside: '', setAsideCode: '',
+          postedDate: meta.createdAt ? new Date(meta.createdAt * 1000).toISOString().split('T')[0] : null,
+          deadline: null,
+          archiveDate: null, active: true,
+          state: '', city: '',
+          desc: (meta.description || '').substring(0, 300),
+          uiLink: link,
+          dataEndpoint: dataLink,
+          contact: '', awardAmount: 0, recipient: '', classCode: '', baseType: 'Municipal Bid',
+        });
+      }
+    } catch(e) { console.error(`  Socrata Discovery error: ${e.message}`); }
+  }
+
+  console.log(`Socrata total: ${results.length}`);
+  return results;
+}
+
+// ── CKAN Open Data API ────────────────────────────────────────────────────────
+// CKAN Action API — JSON, no auth required. Full portal list from Gemini research.
+const CKAN_PORTALS = [
+  // US Federal
+  { base: 'https://catalog.data.gov',    label: 'Data.gov',       query: 'occupational health procurement solicitation', fq: '',                     state: '' },
+  // US State / City
+  { base: 'https://data.virginia.gov',   label: 'Virginia',       query: 'eVA procurement medical services',            fq: 'tags:procurement',      state: 'VA' },
+  { base: 'https://data.boston.gov',     label: 'Boston',         query: 'health medical services contract bid',        fq: '',                     state: 'MA' },
+  { base: 'https://data.sanjoseca.gov',  label: 'San Jose CA',    query: 'medical occupational health bid',             fq: '',                     state: 'CA' },
+  { base: 'https://www.denvergov.org',   label: 'Denver CO',      query: 'medical health solicitation',                 fq: '',                     state: 'CO' },
+];
+
+async function fetchCKAN() {
+  const results = [];
+  const seen = new Set();
+
+  for (const portal of CKAN_PORTALS) {
+    const base = portal.base.endsWith('/opendata')
+      ? portal.base.replace('/opendata', '')
+      : portal.base;
+    const url = `${base}/api/3/action/package_search` +
+      `?q=${encodeURIComponent(portal.query)}` +
+      (portal.fq ? `&fq=${encodeURIComponent(portal.fq)}` : '') +
+      `&rows=20&sort=metadata_modified+desc`;
+
+    try {
+      const res = await safeFetch(url, { headers: { 'Accept': 'application/json' } });
+      if (!res.ok) { console.log(`  CKAN ${portal.label}: HTTP ${res.status}`); continue; }
+      const json = await res.json();
+      const packages = json.result?.results || [];
+      console.log(`  CKAN ${portal.label}: ${packages.length} packages`);
+
+      for (const pkg of packages) {
+        const title = pkg.title || '';
+        const notes = (pkg.notes || '').toLowerCase();
+        const tags = (pkg.tags || []).map(t => t.name || '').join(' ').toLowerCase();
+        const relevantText = (title + ' ' + notes + ' ' + tags).toLowerCase();
+        const isRelevant = ['solicitation','rfp','rfq','bid','contract','procurement','medical','health','occupational']
+          .some(kw => relevantText.includes(kw));
+        if (!isRelevant) continue;
+
+        const id = `CKAN-${portal.label.replace(/\s/g,'')}-${pkg.id || Buffer.from(title).toString('base64').slice(0,10)}`;
+        if (seen.has(id)) continue; seen.add(id);
+
+        const resources = pkg.resources || [];
+        const link = resources.find(r => ['JSON','CSV','HTML'].includes(r.format?.toUpperCase()))?.url
+          || `${portal.base}/dataset/${pkg.name}`;
+
+        results.push({
+          id, source: 'CKAN',
+          title, agency: pkg.organization?.title || portal.label,
+          subAgency: '', office: '', solNum: pkg.name || '',
+          noticeId: id, noticeType: 'Open Data Procurement',
+          naicsCode: '621111', naicsDesc: '',
+          setAside: '', setAsideCode: '',
+          postedDate: pkg.metadata_created ? pkg.metadata_created.split('T')[0] : null,
+          deadline: pkg.extras?.find(e => e.key === 'deadline_date')?.value || null,
+          archiveDate: null, active: true,
+          state: portal.state, city: '',
+          desc: (pkg.notes || '').substring(0, 300),
+          uiLink: link,
+          contact: pkg.maintainer_email || pkg.author_email || '',
+          awardAmount: 0, recipient: '', classCode: '', baseType: 'Open Data',
+        });
+      }
+    } catch(e) { console.error(`  CKAN ${portal.label} error: ${e.message}`); }
+  }
+
+  console.log(`CKAN total: ${results.length}`);
+  return results;
+}
+
+
 // Puppeteer/Browserless scraping removed — too unreliable on free tier.
 // Federal APIs (SAM, USASpending, IDV, Grants, Tango, FedReg) provide
 // all high-quality opportunities without any external browser dependency.
@@ -695,6 +850,8 @@ app.get('/api/cache-status', async (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+app.get('/api/socrata',    async (req, res) => { try { res.json({ success:true, data: await fetchSocrata() }); }    catch(e) { res.status(500).json({ success:false, error:e.message, data:[] }); } });
+app.get('/api/ckan',       async (req, res) => { try { res.json({ success:true, data: await fetchCKAN() }); }      catch(e) { res.status(500).json({ success:false, error:e.message, data:[] }); } });
 app.get('/api/fpds',      async (req, res) => { try { res.json({ success:true, data: await fetchFPDS() }); }                                              catch(e) { res.status(500).json({ success:false, error:e.message, data:[] }); } });
 app.get('/api/sbir',        async (req, res) => { try { res.json({ success:true, data: await fetchSBIR() }); }                                                                           catch(e) { res.status(500).json({ success:false, error:e.message, data:[] }); } });
 
@@ -845,6 +1002,8 @@ async function backgroundRefresh() {
       { key: 'opp:fedreg',     fn: () => fetchFederalRegister() },
       { key: 'opp:fpds',       fn: () => fetchFPDS() },
       { key: 'opp:subawards',  fn: () => fetchSubawards(days, kw) },
+      { key: 'opp:socrata',    fn: () => fetchSocrata() },
+      { key: 'opp:ckan',       fn: () => fetchCKAN() },
     ];
 
     // Run fast API sources in parallel
@@ -866,7 +1025,7 @@ async function backgroundRefresh() {
 
     // Build combined index (just IDs + metadata, not full data) for the status endpoint
     const allData = [];
-    const allKeys = [...sources.map(s => s.key), 'opp:states'];
+    const allKeys = [...sources.map(s => s.key), 'opp:states', 'opp:socrata', 'opp:ckan'];
     for (const key of allKeys) {
       const d = await cacheGet(key);
       if (d) allData.push(...d);
