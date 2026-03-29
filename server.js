@@ -346,70 +346,14 @@ async function fetchIDV(daysBack = 180, extraKeywords = []) {
 // Prime contractors subbing out occ med work — Concentra, Leidos, SAIC, etc.
 // Shows who the real delivery chain is and where Occu-Med could fit as a sub.
 async function fetchSubawards(daysBack = 90, extraKeywords = []) {
-  console.log('\nFetching federal subawards...');
-  const { start, end } = dateRange(daysBack);
-  const seen = new Set();
-  const results = [];
-
-  const subBatches = [...OCC_KEYWORDS_BATCHES.slice(0, 2)];
-  if (extraKeywords && extraKeywords.length > 0) subBatches.push(extraKeywords.slice(0, 5));
-  for (const batch of subBatches) {
-    const body = JSON.stringify({
-      filters: {
-        time_period: [{ start_date: start, end_date: end }],
-        keywords: batch,
-        award_type_codes: ['A', 'B', 'C', 'D'],
-      },
-      fields: [
-        'Sub-Award ID', 'Sub-Award Type', 'Sub-Awardee Name', 'Sub-Award Date',
-        'Sub-Award Amount', 'Awarding Agency', 'Sub-Award Description'
-      ],
-      sort: 'Action Date', order: 'desc', limit: 50, page: 1
-    });
-
-    try {
-      const { status, data } = await httpsPost(
-        'https://api.usaspending.gov/api/v2/search/spending_by_award/subawards/', body
-      );
-      if (status !== 200) { console.log(`  Subawards HTTP ${status}:`, JSON.stringify(data).slice(0,150)); continue; }
-      for (const r of data.results || []) {
-        const id = 'SUB-' + (r['Sub-Award ID'] || Math.random());
-        if (seen.has(id)) continue;
-        seen.add(id);
-        const sub = r['Sub-Awardee Name'] || '';
-        const amt = r['Sub-Award Amount'];
-        results.push({
-          id, source: 'SUB',
-          title: (r['Sub-Award Description'] || 'Federal Subcontract').substring(0, 120),
-          agency: r['Awarding Agency'] || 'Unknown Agency',
-          subAgency: '', office: '',
-          solNum: r['Sub-Award ID'] || '', noticeId: r['Sub-Award ID'] || '',
-          noticeType: 'Federal Subcontract',
-          naicsCode: '621111', naicsDesc: '',
-          setAside: '', setAsideCode: '',
-          postedDate: r['Sub-Award Date'] || null,
-          deadline: null, archiveDate: null, active: false,
-          state: r['Place of Performance State Code'] || '', city: '',
-          desc: `Subcontract to ${sub || 'N/A'}. Value: ${amt ? '$' + Number(amt).toLocaleString() : 'N/A'}.`,
-          uiLink: 'https://www.usaspending.gov/search',
-          contact: '', awardAmount: amt || 0, recipient: sub,
-          classCode: '', baseType: 'Subaward',
-        });
-      }
-    } catch (e) { console.error('Subawards error:', e.message); }
-  }
-  console.log(`Subawards total: ${results.length}`);
-  return results;
+  // Removed — not RFPs
+  return [];
 }
 
 // ── Source 5: Federal Grants & Assistance ─────────────────────────────────────
 async function fetchGrants(daysBack = 90, extraKeywords = []) {
-  console.log('\nFetching federal grants/assistance...');
-  return usaSpendingSearch({
-    awardTypeCodes: ['02', '03', '04', '05'],
-    source: 'GRANTS', noticeType: 'Federal Grant / Assistance', baseType: 'Grant',
-    daysBack, label: 'Grants', extraKeywords
-  });
+  // Removed — not RFPs
+  return [];
 }
 
 // ── Source 6: SBIR (best-effort — API often rate-limited) ─────────────────────
@@ -457,6 +401,9 @@ async function fetchSBIR() {
 // Set env var TANGO_API_KEY in your Render environment variables
 
 const TANGO_KEY       = process.env.TANGO_API_KEY       || '';
+const GEMINI_KEY      = process.env.GEMINI_API_KEY      || '';
+const TAVILY_KEY      = process.env.TAVILY_API_KEY      || '';
+const SERPER_KEY      = process.env.SERPER_API_KEY      || '';
 // Tango search terms — specific to Occu-Med's service lines
 const OCC_TERMS = [
   'pre-deployment medical',
@@ -514,35 +461,6 @@ async function fetchTango() {
       }
     } catch(e) { console.error(`  Tango opps error "${term}":`, e.message); }
 
-    // Procurement Forecasts
-    try {
-      const url2 = `https://tango.makegov.com/api/forecasts/?search=${encodeURIComponent(term)}&limit=20`;
-      const { status: s2, data: d2 } = await httpsGetH(url2, headers);
-      const forecasts = d2.results || [];
-      console.log(`  Tango forecasts "${term}": HTTP ${s2}, ${forecasts.length} results`);
-      for (const f of forecasts) {
-        const id = 'TANGO-FC-' + (f.id || Math.random());
-        if (seen.has(id)) continue; seen.add(id);
-        results.push({
-          id, source: 'TANGO',
-          title: '[FORECAST] ' + (f.title || f.description || 'Procurement Forecast'),
-          agency: f.agency_name || f.department || 'Unknown Agency',
-          subAgency: '', office: '',
-          solNum: f.requirement_id || '', noticeId: String(f.id || ''),
-          noticeType: 'Procurement Forecast',
-          naicsCode: f.naics_code || '621111', naicsDesc: '',
-          setAside: f.set_aside || '', setAsideCode: '',
-          postedDate: f.fiscal_year ? `${f.fiscal_year}-01-01` : null,
-          deadline: f.anticipated_award_date || f.estimated_solicitation_date || null,
-          archiveDate: null, active: true,
-          state: '', city: '',
-          desc: f.description || f.scope || '',
-          uiLink: f.url || 'https://tango.makegov.com',
-          contact: '', awardAmount: f.estimated_value || 0, recipient: '',
-          classCode: '', baseType: 'Forecast',
-        });
-      }
-    } catch(e) { console.error(`  Tango forecasts error "${term}":`, e.message); }
   }
 
   console.log(`Tango total: ${results.length}`);
@@ -555,62 +473,10 @@ async function fetchTango() {
 // This is the earliest possible BD signal — months before a procurement posts.
 
 async function fetchFederalRegister() {
-  const terms = ['occupational medical surveillance', 'hearing conservation', 'respirator medical evaluation', 'fit for duty', 'deployment health assessment'];
-  const results = [];
-  const seen = new Set();
-
-  // Date formatted as MM/DD/YYYY — safer for Federal Register API (avoids 400 on ISO format)
-  const d30 = new Date(); d30.setDate(d30.getDate() - 30);
-  const dateStr = d30.toISOString().split('T')[0]; // YYYY-MM-DD required by Federal Register API
-
-  for (const term of terms) {
-    // Strip literal quotes from term — encoding issues cause 400s
-    const safeTerm = term.replace(/"/g, '');
-    console.log(`\nFetching Federal Register: "${safeTerm}"...`);
-    try {
-      // Use safeFetch — federalregister.gov handles standard percent-encoding fine
-      const url = `https://www.federalregister.gov/api/v1/documents.json` +
-        `?per_page=20&order=newest` +
-        `&conditions[term]=${encodeURIComponent(safeTerm)}` +
-        `&conditions[publication_date][gte]=${dateStr}`;
-
-      const res = await safeFetch(url, { headers: { 'Accept': 'application/json' } });
-      if (!res.ok) {
-        console.log(`  FedReg "${safeTerm}": HTTP ${res.status} — skipping`);
-        continue;
-      }
-      const data = await res.json();
-      const status = res.status;
-      const docs = data.results || [];
-      console.log(`  FedReg "${term}": ${docs.length} results`);
-      for (const d of docs) {
-        const id = 'FEDREG-' + (d.document_number || Math.random());
-        if (seen.has(id)) continue; seen.add(id);
-        results.push({
-          id, source: 'FEDREG',
-          title: '[REG ALERT] ' + (d.title || 'Federal Register Notice'),
-          agency: (Array.isArray(d.agencies) ? d.agencies.map(a => a.name||a.raw_name||'').filter(Boolean).join(', ') : (d.agencies||'')) || 'Federal Agency',
-          subAgency: '', office: '',
-          solNum: d.document_number || '', noticeId: d.document_number || '',
-          noticeType: d.type === 'PRORULE' ? 'Proposed Rule' : d.type === 'RULE' ? 'Final Rule' : 'Federal Notice',
-          naicsCode: '621111', naicsDesc: 'Occupational Medicine',
-          setAside: '', setAsideCode: '',
-          postedDate: d.publication_date || null,
-          deadline: d.effective_on || d.comment_date || null,
-          archiveDate: null, active: true,
-          state: '', city: '',
-          desc: d.abstract || d.excerpts || '',
-          uiLink: d.html_url || d.pdf_url || 'https://www.federalregister.gov',
-          contact: '', awardAmount: 0, recipient: '',
-          classCode: '', baseType: 'Regulatory Notice',
-        });
-      }
-    } catch(e) { console.error(`  FedReg error for "${term}":`, e.message); }
-  }
-
-  console.log(`Federal Register total: ${results.length}`);
-  return results;
+  // Removed — not RFPs
+  return [];
 }
+
 
 
 // ── Socrata Open Data API (SODA) ─────────────────────────────────────────────
@@ -621,169 +487,20 @@ async function fetchFederalRegister() {
 const SOCRATA_TOKEN = process.env.SOCRATA_APP_TOKEN || '';
 
 async function fetchSocrata() {
-  const results = [];
-  const seen = new Set();
-
-  // Socrata Discovery API searches across ALL Socrata portals simultaneously
-  // Filter to US government domains only (skip international noise)
-  const usDomains = [
-    'data.cityofnewyork.us', 'data.cityofchicago.org', 'data.texas.gov',
-    'data.lacity.org', 'data.sfgov.org', 'data.austintexas.gov',
-    'data.seattle.gov', 'data.phila.gov', 'data.baltimorecity.gov',
-    'data.miamidade.gov', 'data.cookcountyil.gov', 'data.montgomerycountymd.gov',
-    'data.nashville.gov', 'data.brla.gov', 'data.kcmo.org',
-    'opendata.maryland.gov', 'data.ny.gov', 'data.ca.gov',
-    'data.illinois.gov', 'data.michigan.gov', 'data.pa.gov',
-    'data.colorado.gov', 'data.oregon.gov', 'data.utah.gov',
-    'data.iowa.gov', 'data.ct.gov', 'data.ok.gov', 'data.mo.gov',
-    'data.hawaii.gov', 'data.smcgov.org', 'data.cincinnati-oh.gov',
-    'opendata.lasvegasnevada.gov'
-  ].join(',');
-
-  // Occu-Med procurement search terms
-  const searchTerms = [
-    'medical surveillance occupational',
-    'health screening solicitation',
-    'DOT physical examination',
-    'fit for duty medical',
-    'occupational health services bid',
-    'pre-employment medical',
-  ];
-
-  for (const term of searchTerms) {
-    try {
-      // Discovery API: searches dataset names, descriptions, and column names
-      const url = `https://api.us.socrata.com/api/catalog/v1` +
-        `?q=${encodeURIComponent(term)}` +
-        `&domains=${encodeURIComponent(usDomains)}` +
-        `&categories=Government%2CPublic+Safety%2CHealth` +
-        `&limit=20&offset=0`;
-
-      const headers = { 'Accept': 'application/json' };
-      if (SOCRATA_TOKEN) headers['X-App-Token'] = SOCRATA_TOKEN;
-
-      const res = await safeFetch(url, { headers });
-      if (!res.ok) { console.log(`  Socrata Discovery "${term}": HTTP ${res.status}`); continue; }
-      const json = await res.json();
-      const datasets = json.results || [];
-      console.log(`  Socrata Discovery "${term}": ${datasets.length} datasets`);
-
-      for (const ds of datasets) {
-        const meta = ds.resource || {};
-        const title = meta.name || '';
-        if (!title || title.length < 5) continue;
-
-        // Must look like a procurement/solicitation dataset
-        const desc = (meta.description || '').toLowerCase();
-        const lTitle = title.toLowerCase();
-        const isProcurement = ['solicitation','bid','rfp','rfq','contract','procurement','award','purchase']
-          .some(kw => lTitle.includes(kw) || desc.includes(kw));
-        if (!isProcurement) continue;
-
-        const domain = ds.metadata?.domain || '';
-        const id4 = meta.id || '';
-        const rawId = `SOCRATA-${id4}`;
-        if (seen.has(rawId)) continue; seen.add(rawId);
-
-        const link = meta.permalink || `https://${domain}/d/${id4}`;
-        const dataLink = `https://${domain}/resource/${id4}.json`;
-
-        results.push({
-          id: rawId, source: 'SOCRATA',
-          title,
-          agency: ds.classification?.domain_category || domain || 'Municipal Government',
-          subAgency: '', office: '', solNum: id4,
-          noticeId: rawId, noticeType: 'Municipal Solicitation',
-          naicsCode: '621111', naicsDesc: '',
-          setAside: '', setAsideCode: '',
-          postedDate: meta.createdAt ? new Date(meta.createdAt * 1000).toISOString().split('T')[0] : null,
-          deadline: null,
-          archiveDate: null, active: true,
-          state: '', city: '',
-          desc: (meta.description || '').substring(0, 300),
-          uiLink: link,
-          dataEndpoint: dataLink,
-          contact: '', awardAmount: 0, recipient: '', classCode: '', baseType: 'Municipal Bid',
-        });
-      }
-    } catch(e) { console.error(`  Socrata Discovery error: ${e.message}`); }
-  }
-
-  console.log(`Socrata total: ${results.length}`);
-  return results;
+  // Removed — not RFPs
+  return [];
 }
+
 
 // ── CKAN Open Data API ────────────────────────────────────────────────────────
 // CKAN Action API — JSON, no auth required. Full portal list from Gemini research.
-const CKAN_PORTALS = [
-  // US Federal
-  { base: 'https://catalog.data.gov',    label: 'Data.gov',       query: 'occupational health procurement solicitation', fq: '',                     state: '' },
-  // US State / City
-  { base: 'https://data.virginia.gov',   label: 'Virginia',       query: 'eVA procurement medical services',            fq: 'tags:procurement',      state: 'VA' },
-  { base: 'https://data.boston.gov',     label: 'Boston',         query: 'health medical services contract bid',        fq: '',                     state: 'MA' },
-  { base: 'https://data.sanjoseca.gov',  label: 'San Jose CA',    query: 'medical occupational health bid',             fq: '',                     state: 'CA' },
-  { base: 'https://www.denvergov.org',   label: 'Denver CO',      query: 'medical health solicitation',                 fq: '',                     state: 'CO' },
-];
+
 
 async function fetchCKAN() {
-  const results = [];
-  const seen = new Set();
-
-  for (const portal of CKAN_PORTALS) {
-    const base = portal.base.endsWith('/opendata')
-      ? portal.base.replace('/opendata', '')
-      : portal.base;
-    const url = `${base}/api/3/action/package_search` +
-      `?q=${encodeURIComponent(portal.query)}` +
-      (portal.fq ? `&fq=${encodeURIComponent(portal.fq)}` : '') +
-      `&rows=20&sort=metadata_modified+desc`;
-
-    try {
-      const res = await safeFetch(url, { headers: { 'Accept': 'application/json' } });
-      if (!res.ok) { console.log(`  CKAN ${portal.label}: HTTP ${res.status}`); continue; }
-      const json = await res.json();
-      const packages = json.result?.results || [];
-      console.log(`  CKAN ${portal.label}: ${packages.length} packages`);
-
-      for (const pkg of packages) {
-        const title = pkg.title || '';
-        const notes = (pkg.notes || '').toLowerCase();
-        const tags = (pkg.tags || []).map(t => t.name || '').join(' ').toLowerCase();
-        const relevantText = (title + ' ' + notes + ' ' + tags).toLowerCase();
-        const isRelevant = ['solicitation','rfp','rfq','bid','contract','procurement','medical','health','occupational']
-          .some(kw => relevantText.includes(kw));
-        if (!isRelevant) continue;
-
-        const id = `CKAN-${portal.label.replace(/\s/g,'')}-${pkg.id || Buffer.from(title).toString('base64').slice(0,10)}`;
-        if (seen.has(id)) continue; seen.add(id);
-
-        const resources = pkg.resources || [];
-        const link = resources.find(r => ['JSON','CSV','HTML'].includes(r.format?.toUpperCase()))?.url
-          || `${portal.base}/dataset/${pkg.name}`;
-
-        results.push({
-          id, source: 'CKAN',
-          title, agency: pkg.organization?.title || portal.label,
-          subAgency: '', office: '', solNum: pkg.name || '',
-          noticeId: id, noticeType: 'Open Data Procurement',
-          naicsCode: '621111', naicsDesc: '',
-          setAside: '', setAsideCode: '',
-          postedDate: pkg.metadata_created ? pkg.metadata_created.split('T')[0] : null,
-          deadline: pkg.extras?.find(e => e.key === 'deadline_date')?.value || null,
-          archiveDate: null, active: true,
-          state: portal.state, city: '',
-          desc: (pkg.notes || '').substring(0, 300),
-          uiLink: link,
-          contact: pkg.maintainer_email || pkg.author_email || '',
-          awardAmount: 0, recipient: '', classCode: '', baseType: 'Open Data',
-        });
-      }
-    } catch(e) { console.error(`  CKAN ${portal.label} error: ${e.message}`); }
-  }
-
-  console.log(`CKAN total: ${results.length}`);
-  return results;
+  // Removed — not RFPs
+  return [];
 }
+
 
 
 // Puppeteer/Browserless scraping removed — too unreliable on free tier.
@@ -801,6 +518,276 @@ async function fetchBonfire() {
   return [];
 }
 
+// ── Gemini Google Search Grounding ───────────────────────────────────────────
+// Uses Gemini 2.0 Flash's built-in Google Search tool to find active RFPs
+// across the entire web — SAM.gov, agency sites, GovWin, procurement portals.
+// Free: 1,500 req/day on Gemini free tier. No extra key needed beyond GEMINI_API_KEY.
+const GEMINI_SEARCH_QUERIES = [
+  'active government solicitation RFP occupational health medical examination services 2026 site:sam.gov',
+  'federal contract solicitation "pre-employment medical" OR "fit for duty" OR "medical surveillance" open 2026',
+  'government RFP "occupational medicine" OR "pre-deployment medical" OR "hearing conservation" solicitation deadline 2026',
+  'DoD DoS contractor medical evaluation RFP solicitation open 2026',
+  'OSHA medical surveillance program government contract solicitation 2026',
+];
+
+async function fetchGeminiSearch() {
+  if (!GEMINI_KEY) { console.log('  Gemini Search: no GEMINI_API_KEY set'); return []; }
+  const results = [];
+  const seen = new Set();
+
+  for (const query of GEMINI_SEARCH_QUERIES) {
+    try {
+      console.log(`  Gemini Search: "${query.substring(0, 60)}..."`);
+      const res = await safeFetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_KEY}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{
+              parts: [{ text: `Search for active government RFPs and solicitations. Query: ${query}
+
+For each result found, extract and return ONLY a JSON array (no other text) with objects having these fields:
+- title: the solicitation or RFP title
+- agency: the issuing agency
+- url: direct URL to the opportunity
+- solNum: solicitation number if visible (or "")
+- deadline: response deadline date if visible (or "")
+- desc: 1-2 sentence description
+- source: where you found it (e.g. "SAM.gov", "Agency Website", etc.)
+
+Return only current, open solicitations. Return [] if nothing relevant found.` }]
+            }],
+            tools: [{ google_search: {} }],
+            generationConfig: { maxOutputTokens: 1500 }
+          })
+        }
+      );
+
+      if (!res.ok) { console.log(`  Gemini Search HTTP ${res.status}`); continue; }
+      const json = await res.json();
+
+      // Extract grounding citations (the actual search results found)
+      const groundingChunks = json.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+      const textPart = json.candidates?.[0]?.content?.parts?.[0]?.text || '';
+
+      // Try to parse structured JSON from Gemini's response
+      let parsed = [];
+      try {
+        const clean = textPart.replace(/```json|```/g, '').trim();
+        const jsonMatch = clean.match(/\[[\s\S]*\]/);
+        if (jsonMatch) parsed = JSON.parse(jsonMatch[0]);
+      } catch(_) {}
+
+      // Also normalize grounding chunks as fallback opportunities
+      for (const chunk of groundingChunks) {
+        const web = chunk.web || {};
+        if (!web.uri || !web.title) continue;
+        const id = 'GSEARCH-' + Buffer.from(web.uri).toString('base64').slice(0, 16);
+        if (seen.has(id)) continue; seen.add(id);
+        // Only include if it looks like a procurement URL
+        const isProcurement = ['sam.gov','usaspending','govwin','fpds','solicitation','rfp','contract','procurement','bid']
+          .some(kw => web.uri.toLowerCase().includes(kw) || web.title.toLowerCase().includes(kw));
+        if (!isProcurement) continue;
+        results.push({
+          id, source: 'AI-SEARCH',
+          title: web.title,
+          agency: 'See Source', subAgency: '', office: '',
+          solNum: '', noticeId: id, noticeType: 'Web Search Result',
+          naicsCode: '621111', naicsDesc: '',
+          setAside: '', setAsideCode: '',
+          postedDate: null, deadline: null,
+          archiveDate: null, active: true,
+          state: '', city: '',
+          desc: `Found via AI web search. Query: ${query.substring(0, 100)}`,
+          uiLink: web.uri,
+          contact: '', awardAmount: 0, recipient: '', classCode: '', baseType: 'AI Search',
+        });
+      }
+
+      // Add Gemini's structured results
+      for (const r of parsed) {
+        if (!r.title || !r.url) continue;
+        const id = 'GSEARCH-' + Buffer.from(r.url).toString('base64').slice(0, 16);
+        if (seen.has(id)) continue; seen.add(id);
+        const deadline = r.deadline ? new Date(r.deadline) : null;
+        if (deadline && deadline < new Date()) continue; // skip expired
+        results.push({
+          id, source: 'AI-SEARCH',
+          title: r.title,
+          agency: r.agency || 'Federal Agency', subAgency: '', office: '',
+          solNum: r.solNum || '', noticeId: id, noticeType: 'AI-Found Solicitation',
+          naicsCode: '621111', naicsDesc: '',
+          setAside: '', setAsideCode: '',
+          postedDate: null, deadline: r.deadline || null,
+          archiveDate: null, active: true,
+          state: '', city: '',
+          desc: r.desc || '',
+          uiLink: r.url,
+          contact: '', awardAmount: 0, recipient: '', classCode: '', baseType: 'AI Search',
+        });
+      }
+
+      console.log(`  Gemini Search: ${groundingChunks.length} citations, ${parsed.length} structured results`);
+      // Rate limit: 10 RPM on free tier — space calls out
+      await new Promise(r => setTimeout(r, 6500));
+    } catch(e) { console.error(`  Gemini Search error: ${e.message}`); }
+  }
+
+  console.log(`Gemini AI Search total: ${results.length}`);
+  return results;
+}
+
+// ── Tavily AI Search ──────────────────────────────────────────────────────────
+// Purpose-built AI search API. Returns clean structured JSON — no scraping.
+// Free tier: 1,000 searches/month. Get key at tavily.com (no credit card).
+// Add TAVILY_API_KEY to Render environment variables.
+const TAVILY_QUERIES = [
+  'active government RFP occupational health medical examination services solicitation',
+  'federal solicitation pre-employment medical evaluation pre-deployment health',
+  'government contract RFP OSHA medical surveillance hearing conservation',
+  'DoD contractor medical examination solicitation open bid',
+  'fit for duty medical evaluation government contract',
+];
+
+const TAVILY_DOMAINS = [
+  'sam.gov', 'beta.sam.gov', 'usaspending.gov', 'govwin.io',
+  'fpds.gov', 'tango.makegov.com', 'acquisition.gov',
+];
+
+async function fetchTavilySearch() {
+  if (!TAVILY_KEY) { console.log('  Tavily: no TAVILY_API_KEY set'); return []; }
+  const results = [];
+  const seen = new Set();
+
+  for (const query of TAVILY_QUERIES) {
+    try {
+      console.log(`  Tavily: "${query.substring(0, 60)}..."`);
+      const res = await safeFetch('https://api.tavily.com/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          api_key: TAVILY_KEY,
+          query,
+          search_depth: 'basic',
+          include_answer: false,
+          include_raw_content: false,
+          max_results: 10,
+          include_domains: TAVILY_DOMAINS,
+        })
+      });
+
+      if (!res.ok) { console.log(`  Tavily HTTP ${res.status}`); continue; }
+      const json = await res.json();
+      const items = json.results || [];
+      console.log(`  Tavily "${query.substring(0,40)}...": ${items.length} results`);
+
+      for (const item of items) {
+        const id = 'TAVILY-' + Buffer.from(item.url || '').toString('base64').slice(0, 16);
+        if (seen.has(id)) continue; seen.add(id);
+        // Only keep if it looks like a solicitation
+        const text = ((item.title || '') + ' ' + (item.content || '')).toLowerCase();
+        const isRFP = ['solicitation','rfp','rfq','bid','proposal','contract opportunity','notice','award']
+          .some(kw => text.includes(kw));
+        if (!isRFP) continue;
+        results.push({
+          id, source: 'TAVILY',
+          title: item.title || 'Government Solicitation',
+          agency: 'See Source', subAgency: '', office: '',
+          solNum: '', noticeId: id, noticeType: 'AI-Found Solicitation',
+          naicsCode: '621111', naicsDesc: '',
+          setAside: '', setAsideCode: '',
+          postedDate: item.published_date || null, deadline: null,
+          archiveDate: null, active: true,
+          state: '', city: '',
+          desc: (item.content || '').substring(0, 280),
+          uiLink: item.url,
+          contact: '', awardAmount: 0, recipient: '', classCode: '', baseType: 'AI Search',
+        });
+      }
+    } catch(e) { console.error(`  Tavily error: ${e.message}`); }
+  }
+
+  console.log(`Tavily AI Search total: ${results.length}`);
+  return results;
+}
+
+// ── Serper Google Search API ──────────────────────────────────────────────────
+// Real Google results via Serper — the cleanest Google SERP API available.
+// Free: 2,500 queries one-time (no monthly reset but enough for months of use).
+// Get key free at serper.dev — no credit card required.
+// Add SERPER_API_KEY to Render environment variables.
+const SERPER_QUERIES = [
+  'active government RFP solicitation "occupational health" OR "medical examination" site:sam.gov 2026',
+  'federal contract RFP "pre-employment medical" OR "pre-deployment health" solicitation open 2026',
+  'government solicitation "OSHA medical surveillance" OR "hearing conservation program" contract',
+  'DoD State Department contractor medical examination RFP bid open solicitation',
+  'federal RFP "fit for duty" OR "medical fitness" government contract solicitation 2026',
+];
+
+async function fetchSerperSearch() {
+  if (!SERPER_KEY) { console.log('  Serper: no SERPER_API_KEY set'); return []; }
+  const results = [];
+  const seen = new Set();
+
+  for (const query of SERPER_QUERIES) {
+    try {
+      console.log(`  Serper: "${query.substring(0, 60)}..."`);
+      const res = await safeFetch('https://google.serper.dev/search', {
+        method: 'POST',
+        headers: {
+          'X-API-KEY': SERPER_KEY,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ q: query, num: 10, gl: 'us', hl: 'en' })
+      });
+
+      if (!res.ok) { console.log(`  Serper HTTP ${res.status}`); continue; }
+      const json = await res.json();
+      const items = [...(json.organic || []), ...(json.news || [])];
+      console.log(`  Serper "${query.substring(0, 40)}...": ${items.length} results`);
+
+      for (const item of items) {
+        const url = item.link || '';
+        if (!url) continue;
+        const id = 'SERPER-' + Buffer.from(url).toString('base64').slice(0, 16);
+        if (seen.has(id)) continue; seen.add(id);
+
+        // Filter to only procurement-relevant results
+        const text = ((item.title || '') + ' ' + (item.snippet || '')).toLowerCase();
+        const isRFP = ['solicitation','rfp','rfq','bid','proposal','contract opportunity',
+          'sources sought','notice','award','sam.gov','usaspending','govwin','procurement']
+          .some(kw => text.includes(kw) || url.toLowerCase().includes(kw));
+        if (!isRFP) continue;
+
+        results.push({
+          id, source: 'SERPER',
+          title: item.title || 'Government Solicitation',
+          agency: item.sitelinks?.[0]?.title || 'See Source',
+          subAgency: '', office: '', solNum: '',
+          noticeId: id, noticeType: 'Google Search Result',
+          naicsCode: '621111', naicsDesc: '',
+          setAside: '', setAsideCode: '',
+          postedDate: item.date || null, deadline: null,
+          archiveDate: null, active: true,
+          state: '', city: '',
+          desc: item.snippet || '',
+          uiLink: url,
+          contact: '', awardAmount: 0, recipient: '', classCode: '', baseType: 'AI Search',
+        });
+      }
+    } catch(e) { console.error(`  Serper error: ${e.message}`); }
+  }
+
+  console.log(`Serper Google Search total: ${results.length}`);
+  return results;
+}
+
+// ── State scraping removed ────────────────────────────────────────────────────
+async function fetchStateBids() { return []; }
+async function fetchSBASubNet() { return []; }
+async function fetchBonfire()   { return []; }
+
 // ── Routes ────────────────────────────────────────────────────────────────────
 app.get('/api/status', (req, res) => res.json({
   status: 'ok', version: '5.0.0', samKeyLoaded: !!SAM_KEY, tangoKeyLoaded: !!TANGO_KEY,
@@ -814,6 +801,7 @@ function parseKeywords(req) {
   return raw ? raw.split(',').map(k => k.trim()).filter(Boolean) : [];
 }
 
+app.get('/api/ai-search',  async (req, res) => { try { const [g, t, sr] = await Promise.all([fetchGeminiSearch(), fetchTavilySearch(), fetchSerperSearch()]); res.json({ success:true, data:[...g,...t,...sr] }); } catch(e) { res.status(500).json({ success:false, error:e.message, data:[] }); } });
 app.get('/api/tango',      async (req, res) => { try { res.json({ success:true, data: await fetchTango() }); }                                               catch(e) { res.status(500).json({ success:false, error:e.message, data:[] }); } });
 app.get('/api/fedreg',     async (req, res) => { try { res.json({ success:true, data: await fetchFederalRegister() }); }                                        catch(e) { res.status(500).json({ success:false, error:e.message, data:[] }); } });
 app.get('/api/states',     async (req, res) => { try { res.json({ success:true, data: await fetchStateBids(parseKeywords(req)) }); }                            catch(e) { res.status(500).json({ success:false, error:e.message, data:[] }); } });
@@ -827,7 +815,7 @@ app.get('/api/bonfire',  async (req, res) => { try { res.json({ success:true, da
 app.get('/api/cache-status', async (req, res) => {
   try {
     const combined = await cacheGet('opp:federal:');
-    const sourceKeys = ['opp:sam','opp:usa','opp:idv','opp:grants','opp:tango','opp:fedreg','opp:fpds','opp:subawards','opp:states'];
+    const sourceKeys = ['opp:sam','opp:idv','opp:tango'];
     const sourceCounts = {};
     for (const k of sourceKeys) {
       const d = await cacheGet(k);
@@ -990,14 +978,11 @@ async function backgroundRefresh() {
     // FIX 4: Fetch and cache each source SEPARATELY to stay under 1MB per key
     const sources = [
       { key: 'opp:sam',        fn: () => fetchSAM() },
-      { key: 'opp:usa',        fn: () => fetchUSASpending(days, kw) },
       { key: 'opp:idv',        fn: () => fetchIDV(days, kw) },
-      { key: 'opp:grants',     fn: () => fetchGrants(days, kw) },
       { key: 'opp:tango',      fn: () => fetchTango() },
-      { key: 'opp:fedreg',     fn: () => fetchFederalRegister() },
-      { key: 'opp:subawards',  fn: () => fetchSubawards(days, kw) },
-      { key: 'opp:socrata',    fn: () => fetchSocrata() },
-      { key: 'opp:ckan',       fn: () => fetchCKAN() },
+      { key: 'opp:gemini',     fn: () => fetchGeminiSearch() },
+      { key: 'opp:tavily',     fn: () => fetchTavilySearch() },
+      { key: 'opp:serper',     fn: () => fetchSerperSearch() },
     ];
 
     // Run fast API sources in parallel
@@ -1019,7 +1004,7 @@ async function backgroundRefresh() {
 
     // Build combined index (just IDs + metadata, not full data) for the status endpoint
     const allData = [];
-    const allKeys = [...sources.map(s => s.key), 'opp:states', 'opp:socrata', 'opp:ckan'];
+    const allKeys = [...sources.map(src => src.key)];
     for (const key of allKeys) {
       const d = await cacheGet(key);
       if (d) allData.push(...d);
