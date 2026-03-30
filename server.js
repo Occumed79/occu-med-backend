@@ -16,6 +16,7 @@ const SAM_KEY = process.env.SAM_API_KEY || '';
 const UPSTASH_URL   = process.env.UPSTASH_REDIS_REST_URL || '';
 const UPSTASH_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || '';
 const CACHE_TTL     = 6 * 60 * 60; // 6 hours in seconds
+const SAM_CACHE_TTL = 24 * 60 * 60; // 24 hours — SAM resets midnight UTC
 
 async function cacheGet(key) {
   if (!UPSTASH_URL) return null;
@@ -424,11 +425,12 @@ async function fetchTango() {
   const results = [];
   const headers = { 'X-API-KEY': TANGO_KEY };
 
-  for (const term of OCC_TERMS.slice(0, 4)) {
+  for (const term of OCC_TERMS.slice(0, 2)) {
     // Opportunities
     try {
       const url = `https://tango.makegov.com/api/opportunities/?search=${encodeURIComponent(term)}&limit=20&ordering=-response_deadline`;
       const { status, data } = await httpsGetH(url, headers);
+      if (status === 429) { console.log(`  Tango: rate limited — stopping`); break; }
       const opps = data.results || [];
       console.log(`  Tango opps "${term}": HTTP ${status}, ${opps.length} results`);
       for (const o of opps) {
@@ -523,11 +525,8 @@ async function fetchBonfire() {
 // across the entire web — SAM.gov, agency sites, GovWin, procurement portals.
 // Free: 1,500 req/day on Gemini free tier. No extra key needed beyond GEMINI_API_KEY.
 const GEMINI_SEARCH_QUERIES = [
-  'active government solicitation RFP occupational health medical examination services 2026 site:sam.gov',
-  'federal contract solicitation "pre-employment medical" OR "fit for duty" OR "medical surveillance" open 2026',
-  'government RFP "occupational medicine" OR "pre-deployment medical" OR "hearing conservation" solicitation deadline 2026',
-  'DoD DoS contractor medical evaluation RFP solicitation open 2026',
-  'OSHA medical surveillance program government contract solicitation 2026',
+  'active government RFP solicitation occupational health medical examination services site:sam.gov 2026',
+  'federal contract solicitation pre-deployment medical OR fit for duty OR occupational medicine open 2026',
 ];
 
 async function fetchGeminiSearch() {
@@ -564,7 +563,11 @@ Return only current, open solicitations. Return [] if nothing relevant found.` }
         }
       );
 
-      if (!res.ok) { console.log(`  Gemini Search HTTP ${res.status}`); continue; }
+      if (!res.ok) {
+        console.log(`  Gemini Search HTTP ${res.status}`);
+        if (res.status === 429) { console.log('  Gemini: rate limited — stopping'); break; }
+        continue;
+      }
       const json = await res.json();
 
       // Extract grounding citations (the actual search results found)
@@ -685,11 +688,9 @@ async function fetchTavilySearch() {
       for (const item of items) {
         const id = 'TAVILY-' + Buffer.from(item.url || '').toString('base64').slice(0, 16);
         if (seen.has(id)) continue; seen.add(id);
-        // Only keep if it looks like a solicitation
-        const text = ((item.title || '') + ' ' + (item.content || '')).toLowerCase();
-        const isRFP = ['solicitation','rfp','rfq','bid','proposal','contract opportunity','notice','award']
-          .some(kw => text.includes(kw));
-        if (!isRFP) continue;
+        // Tavily already searches procurement domains — accept all results
+        // Tavily's domain filter handles relevance; we just skip empty titles
+        if (!item.title || item.title.length < 5) continue;
         results.push({
           id, source: 'TAVILY',
           title: item.title || 'Government Solicitation',
@@ -755,8 +756,8 @@ async function fetchSerperSearch() {
 
         // Filter to only procurement-relevant results
         const text = ((item.title || '') + ' ' + (item.snippet || '')).toLowerCase();
-        const isRFP = ['solicitation','rfp','rfq','bid','proposal','contract opportunity',
-          'sources sought','notice','award','sam.gov','usaspending','govwin','procurement']
+        const isRFP = ['solicitation','rfp','rfq','bid','proposal','contract','notice',
+          'award','sam.gov','usaspending','govwin','procurement','medical','health','osha']
           .some(kw => text.includes(kw) || url.toLowerCase().includes(kw));
         if (!isRFP) continue;
 
@@ -985,14 +986,25 @@ async function backgroundRefresh() {
       { key: 'opp:serper',     fn: () => fetchSerperSearch() },
     ];
 
-    // Run fast API sources in parallel
+    // Run all sources in parallel
     const results = await Promise.allSettled(sources.map(src => src.fn()));
     let totalCount = 0;
     for (let i = 0; i < sources.length; i++) {
-      const data = results[i].status === 'fulfilled' ? results[i].value : [];
-      await cacheSet(sources[i].key, data);
-      console.log(`  [BG] ${sources[i].key}: ${data.length} items cached`);
-      totalCount += data.length;
+      const liveData = results[i].status === 'fulfilled' ? results[i].value : [];
+      const ttl = sources[i].key === 'opp:sam' ? SAM_CACHE_TTL : CACHE_TTL;
+      if (liveData.length > 0) {
+        // Got real data — cache it
+        await cacheSet(sources[i].key, liveData, ttl);
+        console.log(`  [BG] ${sources[i].key}: ${liveData.length} items cached`);
+        totalCount += liveData.length;
+      } else {
+        // Rate limited or empty — keep whatever was cached before, don't overwrite
+        const existing = await cacheGet(sources[i].key);
+        const kept = existing ? existing.length : 0;
+        if (kept > 0) console.log(`  [BG] ${sources[i].key}: 0 live, keeping ${kept} cached`);
+        else console.log(`  [BG] ${sources[i].key}: 0 items (rate limited or empty)`);
+        totalCount += kept;
+      }
     }
 
     // States run separately (slow, Puppeteer) — cache independently
