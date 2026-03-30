@@ -1,0 +1,1850 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Occu-Med | Live RFP Intelligence Portal</title>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700&family=Figtree:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  /* Liquid Glass — macOS Tahoe palette */
+  --bg:        #060a18;
+  --bg2:       #080d1f;
+  --bg3:       #0b1228;
+
+  /* Glass surfaces — translucent layers */
+  --glass:     rgba(255,255,255,.055);
+  --glass2:    rgba(255,255,255,.08);
+  --glass3:    rgba(255,255,255,.11);
+  --glass-b:   rgba(255,255,255,.1);
+  --glass-b2:  rgba(255,255,255,.16);
+  --glass-hi:  inset 0 1px 0 rgba(255,255,255,.14);
+
+  /* Accents — soft, iridescent */
+  --blue:      #6eb5ff;
+  --blue-dim:  rgba(110,181,255,.12);
+  --blue-glow: rgba(110,181,255,.18);
+  --lav:       #a78bfa;
+  --lav-dim:   rgba(167,139,250,.12);
+  --mint:      #34d399;
+  --mint-dim:  rgba(52,211,153,.1);
+  --amber:     #fbbf24;
+  --amber-dim: rgba(251,191,36,.12);
+  --rose:      #fb7185;
+  --rose-dim:  rgba(251,113,133,.12);
+  --sky:       #38bdf8;
+  --sky-dim:   rgba(56,189,248,.1);
+
+  /* Text */
+  --text:   #eef2ff;
+  --text2:  rgba(238,242,255,.55);
+  --text3:  rgba(238,242,255,.3);
+
+  /* Borders */
+  --bdr:    rgba(255,255,255,.09);
+  --bdr2:   rgba(255,255,255,.16);
+
+  /* Type */
+  --fd: 'Sora', sans-serif;
+  --fb: 'Figtree', sans-serif;
+  --fm: 'JetBrains Mono', monospace;
+
+  /* Shadows */
+  --sh:  0 2px 12px rgba(0,0,0,.45), var(--glass-hi);
+  --sh2: 0 8px 40px rgba(0,0,0,.6), var(--glass-hi);
+  --sh3: 0 20px 60px rgba(0,0,0,.7), var(--glass-hi);
+}
+
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html{font-size:16px}
+body{
+  background:var(--bg);
+  color:var(--text);
+  font-family:var(--fb);
+  font-size:14px;
+  min-height:100vh;
+  overflow-x:hidden;
+}
+
+/* Ambient depth — soft color pools in background */
+body::before{
+  content:'';
+  position:fixed;inset:0;
+  background:
+    radial-gradient(ellipse 60% 40% at 20% 10%, rgba(110,181,255,.08) 0%, transparent 60%),
+    radial-gradient(ellipse 50% 35% at 85% 80%, rgba(167,139,250,.07) 0%, transparent 55%),
+    radial-gradient(ellipse 40% 30% at 60% 45%, rgba(52,211,153,.04) 0%, transparent 50%);
+  pointer-events:none;z-index:0;
+}
+
+::-webkit-scrollbar{width:4px;height:4px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:2px}
+::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.22)}
+
+/* ── HEADER ── */
+header{
+  position:sticky;top:0;z-index:200;
+  background:rgba(6,10,24,.7);
+  backdrop-filter:blur(28px) saturate(180%);
+  -webkit-backdrop-filter:blur(28px) saturate(180%);
+  border-bottom:1px solid rgba(255,255,255,.08);
+  height:58px;
+  display:flex;align-items:center;justify-content:space-between;
+  padding:0 22px;
+  box-shadow:0 1px 0 rgba(255,255,255,.06), 0 4px 20px rgba(0,0,0,.4);
+}
+.brand{display:flex;align-items:baseline;gap:10px}
+.brand-name{
+  font-family:var(--fd);font-size:19px;font-weight:600;
+  color:#fff;letter-spacing:-.01em;
+}
+.brand-sub{
+  font-family:var(--fm);font-size:8.5px;
+  color:var(--blue);letter-spacing:.24em;
+  text-transform:uppercase;opacity:.55;
+}
+.hdr-r{display:flex;align-items:center;gap:5px}
+
+.live-badge{
+  display:flex;align-items:center;gap:6px;
+  background:var(--glass);
+  border:1px solid var(--glass-b);
+  border-radius:20px;
+  padding:5px 12px;
+  font-family:var(--fm);font-size:10px;
+  color:var(--text2);
+  box-shadow:var(--glass-hi);
+  letter-spacing:.04em;
+}
+.live-dot{width:6px;height:6px;border-radius:50%;background:var(--mint);box-shadow:0 0 6px var(--mint);animation:pulse 2.5s ease-in-out infinite}
+.live-dot.fetching{background:var(--amber);box-shadow:0 0 6px var(--amber)}
+.live-dot.error{background:var(--rose);box-shadow:0 0 6px var(--rose);animation:none}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.45;transform:scale(.8)}}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes cardIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+@keyframes blink-c{0%,100%{opacity:1}50%{opacity:0}}
+
+.hbtn{
+  display:flex;align-items:center;gap:5px;
+  border-radius:20px;padding:6px 14px;
+  font-family:var(--fb);font-size:12px;font-weight:500;
+  cursor:pointer;transition:all .18s;border:1px solid transparent;
+  white-space:nowrap;
+}
+.hbtn.primary{
+  background:rgba(110,181,255,.15);
+  color:var(--blue);
+  border-color:rgba(110,181,255,.25);
+  box-shadow:var(--glass-hi);
+}
+.hbtn.primary:hover{background:rgba(110,181,255,.22);border-color:rgba(110,181,255,.4)}
+.hbtn.danger{background:var(--rose-dim);color:var(--rose);border-color:rgba(251,113,133,.25)}
+.hbtn.danger:hover{background:rgba(251,113,133,.2)}
+.hbtn.ghost{background:var(--glass);color:var(--text2);border-color:var(--glass-b);box-shadow:var(--glass-hi)}
+.hbtn.ghost:hover{background:var(--glass2);color:var(--text);border-color:var(--glass-b2)}
+.hbtn:disabled{opacity:.3;cursor:not-allowed}
+
+/* ── LAYOUT ── */
+.layout{display:grid;grid-template-columns:252px 1fr;min-height:calc(100vh - 58px);position:relative;z-index:1}
+
+/* ── SIDEBAR ── */
+aside{
+  background:rgba(8,13,31,.6);
+  backdrop-filter:blur(20px);
+  -webkit-backdrop-filter:blur(20px);
+  border-right:1px solid var(--bdr);
+  padding:12px 0;
+  position:sticky;top:58px;
+  height:calc(100vh - 58px);
+  overflow-y:auto;
+  display:flex;flex-direction:column;
+}
+.sb-section{padding:0 10px 10px;border-bottom:1px solid rgba(255,255,255,.04);margin-bottom:2px}
+.sb-lbl{
+  font-family:var(--fm);font-size:8.5px;
+  letter-spacing:.2em;text-transform:uppercase;
+  color:var(--text3);padding:12px 12px 5px;
+}
+.mini-row{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-bottom:4px}
+.mini-s{
+  background:var(--glass);
+  border:1px solid var(--bdr);
+  border-radius:12px;
+  padding:11px 8px;text-align:center;
+  box-shadow:var(--glass-hi);
+  transition:all .18s;
+}
+.mini-s:hover{background:var(--glass2)}
+.mini-n{font-family:var(--fd);font-size:26px;font-weight:600;color:#fff;line-height:1}
+.mini-n.live{color:var(--blue)}
+.mini-n.r{color:var(--rose)}
+.mini-l{font-family:var(--fm);font-size:8.5px;color:var(--text3);margin-top:3px;letter-spacing:.05em;text-transform:uppercase}
+
+/* Source rows */
+.src-status{display:flex;flex-direction:column;gap:2px;padding:0 10px}
+.src-row{
+  display:flex;align-items:center;gap:7px;
+  padding:6px 8px;border-radius:9px;
+  background:transparent;
+  border:1px solid transparent;
+  cursor:pointer;transition:all .15s;
+}
+.src-row:hover{background:var(--glass);border-color:var(--bdr)}
+.src-row.active{background:rgba(110,181,255,.1);border-color:rgba(110,181,255,.2);box-shadow:var(--glass-hi)}
+.src-indicator{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+.src-indicator.ok{background:var(--mint);box-shadow:0 0 5px var(--mint)}
+.src-indicator.fetching{background:var(--amber);animation:pulse 1s ease-in-out infinite}
+.src-indicator.error{background:var(--rose)}
+.src-indicator.idle{background:var(--text3)}
+.src-name{font-family:var(--fb);font-size:11px;color:var(--text2);flex:1}
+.src-cnt{font-family:var(--fm);font-size:9px;color:var(--text3);background:rgba(255,255,255,.06);padding:1px 6px;border-radius:8px}
+
+/* Filter pills */
+.filter-pills{display:flex;flex-direction:column;gap:1px;padding:0 6px}
+.fp{
+  display:flex;align-items:center;gap:7px;
+  padding:6px 9px;cursor:pointer;
+  font-family:var(--fb);font-size:12px;color:var(--text2);
+  transition:all .15s;
+  border-radius:8px;
+}
+.fp:hover{background:var(--glass);color:var(--text)}
+.fp.active{background:rgba(110,181,255,.1);color:var(--blue)}
+.fp .cc{margin-left:auto;font-family:var(--fm);font-size:9px;color:var(--text3);background:rgba(255,255,255,.06);padding:1px 6px;border-radius:6px}
+
+/* API CONFIG */
+.api-cfg{
+  background:var(--glass);
+  border:1px solid var(--bdr);
+  border-radius:12px;padding:11px;
+  margin:6px 10px;
+  box-shadow:var(--glass-hi);
+}
+.api-cfg-title{font-family:var(--fm);font-size:8.5px;letter-spacing:.15em;text-transform:uppercase;color:var(--text3);margin-bottom:7px}
+.api-input{
+  width:100%;
+  background:rgba(0,0,0,.25);
+  border:1px solid var(--bdr);
+  border-radius:8px;
+  color:var(--text);
+  font-family:var(--fm);font-size:10px;
+  padding:7px 9px;outline:none;
+  transition:all .18s;
+}
+.api-input:focus{border-color:rgba(110,181,255,.35);box-shadow:0 0 0 3px rgba(110,181,255,.07)}
+.api-input-lbl{font-family:var(--fm);font-size:8.5px;color:var(--text3);margin-bottom:3px;letter-spacing:.07em;text-transform:uppercase;display:block}
+.api-ff{margin-bottom:7px}
+.btn-apply{
+  width:100%;
+  background:rgba(110,181,255,.13);
+  color:var(--blue);
+  border:1px solid rgba(110,181,255,.22);
+  border-radius:8px;padding:7px;
+  font-family:var(--fd);font-size:11px;font-weight:500;letter-spacing:.04em;
+  cursor:pointer;transition:all .18s;margin-top:3px;
+  box-shadow:var(--glass-hi);
+}
+.btn-apply:hover{background:rgba(110,181,255,.2)}
+
+/* ── MAIN ── */
+main{padding:20px 24px;display:flex;flex-direction:column;gap:12px;min-width:0;position:relative;z-index:1}
+
+/* STATUS BAR */
+.status-bar{
+  background:var(--glass);
+  border:1px solid var(--bdr);
+  border-radius:14px;padding:11px 16px;
+  display:flex;align-items:center;gap:12px;
+  box-shadow:var(--sh);
+  backdrop-filter:blur(12px);
+}
+.status-bar-left{display:flex;align-items:center;gap:9px;flex:1}
+.sb-label{font-family:var(--fm);font-size:9.5px;font-weight:600;color:var(--blue);text-transform:uppercase;letter-spacing:.1em}
+.sb-msg{font-family:var(--fm);font-size:10.5px;color:var(--text2)}
+.sb-time{font-family:var(--fm);font-size:9.5px;color:var(--text3)}
+.fetch-spinner{width:13px;height:13px;border:1.5px solid rgba(255,255,255,.12);border-top-color:var(--blue);border-radius:50%;animation:spin .65s linear infinite;flex-shrink:0}
+.btn-refetch{
+  background:rgba(110,181,255,.12);color:var(--blue);
+  border:1px solid rgba(110,181,255,.2);
+  border-radius:10px;padding:6px 14px;
+  font-family:var(--fb);font-size:12px;font-weight:500;
+  cursor:pointer;transition:all .18s;white-space:nowrap;
+  box-shadow:var(--glass-hi);
+}
+.btn-refetch:hover{background:rgba(110,181,255,.2)}
+.btn-refetch:disabled{opacity:.25;cursor:not-allowed}
+
+/* ERROR */
+.error-notice{
+  background:var(--rose-dim);
+  border:1px solid rgba(251,113,133,.18);
+  border-left:3px solid var(--rose);
+  border-radius:12px;padding:13px 16px;
+  display:flex;align-items:start;gap:11px;
+}
+.error-notice svg{flex-shrink:0;margin-top:2px;color:var(--rose)}
+.error-title{font-family:var(--fm);font-size:11px;font-weight:600;color:var(--rose);margin-bottom:4px}
+.error-body{font-size:13px;color:var(--text2);line-height:1.6}
+.error-body code{font-family:var(--fm);font-size:10.5px;background:rgba(0,0,0,.25);padding:1px 5px;border-radius:4px;color:var(--text)}
+
+/* INTEL BANNER — floating glass panel */
+.intel{
+  background:var(--glass);
+  border:1px solid var(--bdr);
+  border-radius:16px;padding:18px 22px;
+  display:grid;grid-template-columns:1fr 1px 1fr 1px 1fr 1px 1fr;
+  box-shadow:var(--sh2);
+  backdrop-filter:blur(16px);
+}
+.intel-div{width:1px;background:rgba(255,255,255,.07);margin:0 18px}
+.intel-i{text-align:center}
+.intel-n{font-family:var(--fd);font-size:32px;font-weight:600;color:#fff;line-height:1;margin-bottom:3px}
+.intel-n.g{color:var(--mint)}
+.intel-n.r{color:var(--rose)}
+.intel-n.b{color:var(--blue)}
+.intel-lbl{font-family:var(--fm);font-size:8.5px;color:var(--text3);letter-spacing:.12em;text-transform:uppercase;margin-bottom:1px}
+.intel-sub{font-family:var(--fm);font-size:8.5px;color:var(--text3)}
+.intel-sub.live{color:var(--mint)}
+
+/* TOOLBAR */
+.toolbar{display:flex;align-items:center;gap:7px}
+.sw{flex:1;position:relative}
+.sw svg{position:absolute;left:12px;top:50%;transform:translateY(-50%);color:var(--text3);pointer-events:none}
+.si{
+  width:100%;
+  background:var(--glass);
+  border:1px solid var(--bdr);
+  border-radius:12px;color:var(--text);
+  font-family:var(--fb);font-size:13px;
+  padding:10px 14px 10px 38px;outline:none;
+  transition:all .18s;
+  box-shadow:var(--glass-hi);
+  backdrop-filter:blur(8px);
+}
+.si::placeholder{color:var(--text3)}
+.si:focus{border-color:rgba(110,181,255,.3);background:var(--glass2);box-shadow:0 0 0 3px rgba(110,181,255,.07), var(--glass-hi)}
+.tsel,.naics-sel{
+  background:var(--glass);
+  border:1px solid var(--bdr);
+  color:var(--text2);
+  font-family:var(--fm);font-size:11px;
+  padding:10px 11px;border-radius:12px;
+  outline:none;cursor:pointer;
+  box-shadow:var(--glass-hi);
+  backdrop-filter:blur(8px);
+}
+
+/* TABS */
+.tab-bar{display:flex;gap:2px;border-bottom:1px solid var(--bdr)}
+.tab{
+  padding:8px 16px;
+  font-family:var(--fm);font-size:9.5px;font-weight:500;
+  letter-spacing:.08em;color:var(--text3);cursor:pointer;
+  border-bottom:1.5px solid transparent;margin-bottom:-1px;
+  transition:all .18s;text-transform:uppercase;border-radius:0;
+}
+.tab:hover{color:var(--text2)}
+.tab.active{color:var(--blue);border-bottom-color:var(--blue)}
+
+/* SOURCE BADGES */
+.src-badge{
+  display:inline-flex;align-items:center;
+  font-family:var(--fm);font-size:8.5px;
+  padding:2px 8px;border-radius:20px;
+  font-weight:600;white-space:nowrap;text-transform:uppercase;
+  letter-spacing:.05em;
+}
+.src-badge.sam{background:rgba(110,181,255,.12);color:var(--blue);border:1px solid rgba(110,181,255,.2)}
+.src-badge.usa{background:rgba(52,211,153,.08);color:var(--mint);border:1px solid rgba(52,211,153,.18)}
+.src-badge.idv{background:rgba(56,189,248,.08);color:var(--sky);border:1px solid rgba(56,189,248,.18)}
+.src-badge.tango{background:rgba(251,191,36,.08);color:var(--amber);border:1px solid rgba(251,191,36,.18)}
+.src-badge.fedreg{background:rgba(167,139,250,.1);color:var(--lav);border:1px solid rgba(167,139,250,.2)}
+.src-badge.sub,.src-badge.grants{background:rgba(167,139,250,.1);color:var(--lav);border:1px solid rgba(167,139,250,.2)}
+.src-badge.saved{background:var(--glass);color:var(--text2);border:1px solid var(--bdr)}
+
+/* ── CARDS — liquid glass ── */
+.rfp-list{display:flex;flex-direction:column;gap:6px}
+.rc{
+  background:var(--glass);
+  border:1px solid var(--bdr);
+  border-radius:14px;
+  padding:15px 18px;
+  display:grid;grid-template-columns:1fr auto;gap:12px;align-items:start;
+  cursor:pointer;
+  transition:all .2s;
+  box-shadow:var(--sh);
+  backdrop-filter:blur(10px);
+  animation:cardIn .28s ease both;
+}
+.rc:hover{
+  background:var(--glass2);
+  border-color:var(--glass-b2);
+  box-shadow:var(--sh2);
+  transform:translateY(-1px);
+}
+.rc.federal{border-top-color:rgba(110,181,255,.3)}
+.rc.urgent{border-top-color:rgba(251,113,133,.35)}
+.rc.saved-local{border-top-color:rgba(52,211,153,.3)}
+.rh{display:flex;align-items:flex-start;gap:7px;margin-bottom:9px}
+.rt{
+  font-family:var(--fd);font-size:15px;font-weight:500;
+  color:var(--text);line-height:1.35;flex:1;
+}
+.rm{display:flex;flex-wrap:wrap;gap:9px;margin-bottom:9px}
+.mi{display:flex;align-items:center;gap:3px;font-family:var(--fm);font-size:10px;color:var(--text2)}
+.mi svg{color:var(--text3);opacity:.7}
+.rd{font-size:12px;color:var(--text2);line-height:1.7;margin-bottom:9px;opacity:.75}
+.rtags{display:flex;flex-wrap:wrap;gap:4px}
+.tag{font-size:10px;font-family:var(--fm);padding:2px 8px;border-radius:20px;background:rgba(255,255,255,.05);color:var(--text3);border:1px solid rgba(255,255,255,.07)}
+.tag.naics{background:var(--blue-dim);color:var(--blue);border-color:rgba(110,181,255,.15)}
+.set-aside-badge{font-size:9px;font-family:var(--fm);padding:2px 8px;border-radius:20px;background:var(--amber-dim);color:var(--amber);border:1px solid rgba(251,191,36,.2)}
+
+/* Card right */
+.ra{display:flex;flex-direction:column;align-items:flex-end;gap:5px;min-width:120px}
+.dc{font-family:var(--fm);font-size:9.5px;padding:5px 10px;border-radius:20px;font-weight:600;text-align:center;width:100%;letter-spacing:.05em;text-transform:uppercase}
+.dc.ug{background:var(--rose-dim);color:var(--rose);border:1px solid rgba(251,113,133,.2)}
+.dc.wn{background:var(--amber-dim);color:var(--amber);border:1px solid rgba(251,191,36,.2)}
+.dc.sf{background:var(--mint-dim);color:var(--mint);border:1px solid rgba(52,211,153,.2)}
+.dc.na{background:rgba(255,255,255,.04);color:var(--text3);border:1px solid var(--bdr)}
+.cbs{display:flex;gap:4px;width:100%}
+.bi{
+  flex:1;background:var(--glass);
+  border:1px solid var(--bdr);border-radius:8px;padding:7px;
+  cursor:pointer;color:var(--text3);
+  transition:all .15s;display:flex;align-items:center;justify-content:center;
+  box-shadow:var(--glass-hi);
+}
+.bi:hover{border-color:rgba(110,181,255,.25);color:var(--blue);background:var(--blue-dim)}
+.bi.sv{border-color:rgba(110,181,255,.25);color:var(--blue);background:var(--blue-dim)}
+.bi.del:hover{border-color:rgba(251,113,133,.25);color:var(--rose);background:var(--rose-dim)}
+.notice-type{font-family:var(--fm);font-size:9px;color:var(--text3);text-align:center;padding:2px 0}
+
+/* SKELETON */
+.skeleton-card{background:var(--glass);border:1px solid var(--bdr);border-radius:14px;padding:16px 18px;box-shadow:var(--sh)}
+.skel{background:linear-gradient(90deg,var(--glass) 25%,var(--glass2) 50%,var(--glass) 75%);background-size:200% 100%;animation:shimmer 1.8s infinite;border-radius:6px}
+
+/* MODAL */
+.mo{
+  position:fixed;inset:0;
+  background:rgba(6,10,24,.65);
+  backdrop-filter:blur(20px) saturate(160%);
+  -webkit-backdrop-filter:blur(20px) saturate(160%);
+  z-index:1000;
+  display:flex;align-items:center;justify-content:center;
+  opacity:0;pointer-events:none;transition:opacity .2s;
+}
+.mo.open{opacity:1;pointer-events:all}
+.md{
+  background:rgba(10,16,34,.82);
+  border:1px solid var(--glass-b2);
+  border-radius:20px;padding:26px;
+  width:680px;max-width:94vw;max-height:90vh;overflow-y:auto;
+  transform:translateY(14px) scale(.98);transition:all .22s cubic-bezier(.34,1.56,.64,1);
+  position:relative;
+  box-shadow:var(--sh3);
+  backdrop-filter:blur(24px);
+}
+.mo.open .md{transform:translateY(0) scale(1)}
+.md-title{font-family:var(--fd);font-size:20px;font-weight:600;color:#fff;margin-bottom:2px}
+.md-sub{font-family:var(--fm);font-size:9.5px;color:var(--text3);letter-spacing:.12em;text-transform:uppercase;margin-bottom:16px}
+.ma{display:flex;gap:7px;margin-top:16px;justify-content:flex-end}
+.bcn{
+  background:var(--glass);border:1px solid var(--bdr);
+  color:var(--text2);font-family:var(--fb);font-weight:500;font-size:13px;
+  padding:7px 15px;border-radius:10px;cursor:pointer;transition:all .15s;
+  box-shadow:var(--glass-hi);
+}
+.bcn:hover{border-color:rgba(110,181,255,.28);color:var(--blue);background:var(--blue-dim)}
+.mclose{
+  position:absolute;top:14px;right:14px;
+  background:rgba(255,255,255,.07);
+  border:1px solid var(--bdr);
+  color:var(--text3);
+  width:28px;height:28px;border-radius:50%;
+  cursor:pointer;display:flex;align-items:center;justify-content:center;
+  font-size:13px;transition:all .15s;
+}
+.mclose:hover{border-color:rgba(251,113,133,.3);color:var(--rose);background:var(--rose-dim)}
+
+/* Detail modal */
+.det-grid{display:grid;grid-template-columns:1fr 1fr;gap:11px;margin-bottom:14px}
+.det-field{display:flex;flex-direction:column;gap:3px}
+.det-field.full{grid-column:span 2}
+.det-lbl{font-family:var(--fm);font-size:9px;font-weight:600;color:var(--text3);letter-spacing:.1em;text-transform:uppercase}
+.det-val{font-size:13px;color:var(--text);line-height:1.5}
+.det-val a{color:var(--blue);text-decoration:none}
+.det-val a:hover{text-decoration:underline}
+
+/* AI panel */
+.ai-panel{background:var(--glass);border:1px solid var(--bdr);border-radius:14px;padding:15px;margin-top:12px;box-shadow:var(--glass-hi)}
+.ai-ph{display:flex;align-items:center;gap:8px;margin-bottom:11px}
+.ai-ptitle{font-family:var(--fd);font-size:15px;font-weight:500;color:#fff}
+.ai-sec{margin-bottom:12px}
+.ai-sec-lbl{font-family:var(--fm);font-size:9px;font-weight:700;color:var(--blue);text-transform:uppercase;letter-spacing:.12em;margin-bottom:4px}
+.ai-sec-body{font-size:13px;color:var(--text2);line-height:1.72}
+.ai-cur::after{content:"▋";animation:blink-c .65s step-end infinite}
+.btn-copy{background:transparent;border:1px solid var(--bdr);color:var(--text3);font-family:var(--fm);font-size:9.5px;padding:3px 9px;border-radius:6px;cursor:pointer;transition:all .15s;margin-left:auto}
+.btn-copy:hover{border-color:rgba(110,181,255,.28);color:var(--blue)}
+
+/* KEYWORD TAGS */
+.kw-tag{display:inline-flex;align-items:center;gap:4px;background:var(--blue-dim);border:1px solid rgba(110,181,255,.2);border-radius:20px;padding:3px 9px;font-family:var(--fm);font-size:10px;color:var(--blue)}
+.kw-tag button{background:none;border:none;color:rgba(110,181,255,.45);cursor:pointer;font-size:12px;line-height:1;padding:0;margin-left:2px}
+.kw-tag button:hover{color:var(--rose)}
+
+/* RELEVANCE */
+.rel-badge{display:inline-flex;align-items:center;gap:3px;font-family:var(--fm);font-size:8.5px;padding:2px 8px;border-radius:20px;font-weight:700;letter-spacing:.04em}
+.rel-high{background:var(--mint-dim);color:var(--mint);border:1px solid rgba(52,211,153,.2)}
+.rel-med{background:var(--amber-dim);color:var(--amber);border:1px solid rgba(251,191,36,.2)}
+.rel-low{background:rgba(255,255,255,.04);color:var(--text3);border:1px solid var(--bdr)}
+.rel-none{display:none}
+.rel-score{font-family:var(--fm);font-size:8.5px;color:var(--text3);margin-left:2px}
+
+/* RFP OUTLINE */
+.outline-section{margin-bottom:14px;padding:13px 15px;background:var(--glass);border:1px solid var(--bdr);border-radius:12px;box-shadow:var(--glass-hi)}
+.outline-section-title{font-family:var(--fm);font-size:9.5px;font-weight:700;color:var(--blue);text-transform:uppercase;letter-spacing:.12em;margin-bottom:7px;display:flex;align-items:center;gap:5px}
+.outline-section-body{font-size:13px;color:var(--text2);line-height:1.75}
+.outline-section-body ul{margin:6px 0 0 15px}
+.outline-section-body li{margin-bottom:4px}
+.outline-loading{text-align:center;padding:40px;font-family:var(--fm);font-size:12px;color:var(--text3)}
+.outline-tag{display:inline-flex;align-items:center;padding:3px 10px;border-radius:20px;font-family:var(--fm);font-size:9.5px;font-weight:600;margin:2px;border:1px solid}
+.outline-tag.green{background:var(--mint-dim);color:var(--mint);border-color:rgba(52,211,153,.2)}
+.outline-tag.red{background:var(--rose-dim);color:var(--rose);border-color:rgba(251,113,133,.2)}
+.outline-tag.amber{background:var(--amber-dim);color:var(--amber);border-color:rgba(251,191,36,.2)}
+.outline-cursor::after{content:"▋";animation:blink-c .65s step-end infinite;color:var(--blue)}
+
+/* EMPTY / TOAST */
+.empty{text-align:center;padding:60px 20px;color:var(--text3)}
+.empty h3{font-family:var(--fd);font-size:19px;font-weight:500;color:var(--text2);margin:13px 0 5px}
+.empty p{font-size:13px;color:var(--text3)}
+.toast{
+  position:fixed;bottom:20px;right:20px;
+  background:rgba(10,16,34,.88);
+  color:var(--text);
+  font-family:var(--fb);font-weight:500;font-size:12.5px;
+  padding:11px 16px;border-radius:12px;z-index:2000;
+  transform:translateY(60px);opacity:0;transition:all .22s;
+  max-width:300px;
+  border:1px solid var(--glass-b2);
+  box-shadow:var(--sh2);
+  backdrop-filter:blur(16px);
+}
+.toast.show{transform:translateY(0);opacity:1}
+.toast.err{background:rgba(251,113,133,.12);color:var(--rose);border-color:rgba(251,113,133,.25)}
+.toast.ok{background:rgba(52,211,153,.08);color:var(--mint);border-color:rgba(52,211,153,.2)}
+
+/* Cache badge */
+#cache-badge{display:none;font-family:var(--fm);font-size:9px;padding:2px 8px;border-radius:20px;background:var(--mint-dim);color:var(--mint);border:1px solid rgba(52,211,153,.2)}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <span class="brand-name">Occu-Med</span>
+    <span class="brand-sub">Live RFP Intelligence</span>
+  </div>
+  <div class="hdr-r">
+    <div class="live-badge">
+      <div class="live-dot" id="live-dot"></div>
+      <span id="live-status">Initializing…</span>
+    </div>
+    <button class="hbtn danger" onclick="toggleAlerts()" id="alert-btn" style="display:none">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 01-3.46 0"/></svg>
+      <span id="alert-count">0</span> Urgent
+    </button>
+    <button class="hbtn primary" id="fetch-btn" onclick="fetchAllSources()">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/></svg>
+      Refresh Live Data
+    </button>
+    <button class="hbtn ghost" onclick="openTeamingRadar()" title="Find teaming partners">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>
+      Teaming
+    </button>
+    <button class="hbtn ghost" onclick="fetchAllSources(true)" title="Bypass cache and fetch live data">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+      Force Refresh
+    </button>
+    <button class="hbtn ghost" onclick="exportToCSV()" title="Export to Excel/CSV">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      Export
+    </button>
+    <button class="hbtn ghost" onclick="openAddModal()">+ Add Manual</button>
+  </div>
+</header>
+
+<div class="layout">
+<aside>
+  <!-- MINI STATS -->
+  <div class="sb-section">
+    <div class="mini-row">
+      <div class="mini-s"><div class="mini-n live" id="s-live">—</div><div class="mini-l">Live Fetched</div></div>
+      <div class="mini-s"><div class="mini-n r" id="s-urgent">—</div><div class="mini-l">Urgent ≤7d</div></div>
+    </div>
+    <div class="mini-row">
+      <div class="mini-s"><div class="mini-n" id="s-total">—</div><div class="mini-l">Total</div></div>
+      <div class="mini-s"><div class="mini-n" id="s-saved">0</div><div class="mini-l">Saved</div></div>
+    </div>
+  </div>
+
+  <!-- BACKEND CONFIG -->
+  <div class="api-cfg">
+    <div class="api-cfg-title">Backend Config</div>
+    <div class="api-ff">
+      <label class="api-input-lbl">Backend URL</label>
+      <input class="api-input" type="text" id="backend-url" placeholder="http://localhost:3001" value="https://occu-med-backend.onrender.com">
+    </div>
+    <div class="api-ff">
+      <label class="api-input-lbl">Date Range (days back)</label>
+      <input class="api-input" type="number" id="days-back" value="90" min="7" max="365">
+    </div>
+    <div class="api-ff">
+      <label class="api-input-lbl">Gemini API Key (free — RFP Outline)</label>
+      <input class="api-input" type="password" id="claude-api-key" placeholder="AIzaSy..."
+        oninput="window.GEMINI_KEY=this.value;localStorage.setItem('om_gemini_key',this.value)">
+    </div>
+    <button class="btn-apply" onclick="fetchAllSources()">Apply &amp; Fetch</button>
+    <div style="font-family:var(--fm);font-size:9px;color:rgba(255,255,255,.2);margin-top:7px;line-height:1.6">
+      Backend: https://occu-med-backend.onrender.com
+    </div>
+  </div>
+
+  <!-- DATA SOURCES -->
+  <div class="sb-lbl">Live Data Sources</div>
+  <div class="src-status">
+    <div class="src-row active" id="src-row-all" onclick="setSourceFilter('all',event)">
+      <div class="src-indicator idle" id="ind-all"></div>
+      <span class="src-name">All Sources</span>
+      <span class="src-cnt" id="cnt-all">—</span>
+    </div>
+    <div class="src-row" onclick="setSourceFilter('SAM',event)">
+      <div class="src-indicator idle" id="ind-SAM"></div>
+      <span class="src-name">SAM.gov (Federal RFPs)</span>
+      <span class="src-cnt" id="cnt-SAM">—</span>
+    </div>
+    <div class="src-row" onclick="setSourceFilter('USA',event)">
+      <div class="src-indicator idle" id="ind-USA"></div>
+      <span class="src-name">USASpending.gov</span>
+      <span class="src-cnt" id="cnt-USA">—</span>
+    </div>
+    <div class="src-row" onclick="setSourceFilter('IDV',event)">
+      <div class="src-indicator idle" id="ind-IDV"></div>
+      <span class="src-name">IDV / IDIQ Contracts</span>
+      <span class="src-cnt" id="cnt-IDV">—</span>
+    </div>
+    
+      <span class="src-name">Federal Subawards</span>
+      <span class="src-cnt" id="cnt-SUB">—</span>
+    </div>
+    
+      <span class="src-name">Federal Grants</span>
+      <span class="src-cnt" id="cnt-GRANTS">—</span>
+    </div>
+
+    <div class="src-row" onclick="setSourceFilter('TANGO',event)">
+      <div class="src-indicator idle" id="ind-TANGO"></div>
+      <span class="src-name">Tango (Forecasts)</span>
+      <span class="src-cnt" id="cnt-TANGO">—</span>
+    </div>
+    
+      <span class="src-name">Federal Register</span>
+      <span class="src-cnt" id="cnt-FEDREG">—</span>
+    </div>
+    <div class="src-row" onclick="setSourceFilter('FPDS',event)">
+      <div class="src-indicator idle" id="ind-FPDS"></div>
+      <span class="src-name">FPDS (Contract Awards)</span>
+      <span class="src-cnt" id="cnt-FPDS">—</span>
+    </div>
+
+
+
+    
+      <span class="src-name">Socrata (All US Gov Portals)</span>
+      <span class="src-cnt" id="cnt-SOCRATA">—</span>
+    </div>
+    
+      <span class="src-name">CKAN (Data.gov / VA / Boston / Denver)</span>
+      <span class="src-cnt" id="cnt-CKAN">—</span>
+    </div>
+    <div class="src-row" onclick="setSourceFilter('AI-SEARCH',event)">
+      <div class="src-indicator idle" id="ind-AI-SEARCH"></div>
+      <span class="src-name">Gemini AI Search</span>
+      <span class="src-cnt" id="cnt-AI-SEARCH">—</span>
+    </div>
+    <div class="src-row" onclick="setSourceFilter('SERPER',event)">
+      <div class="src-indicator idle" id="ind-SERPER"></div>
+      <span class="src-name">Serper (Google Search)</span>
+      <span class="src-cnt" id="cnt-SERPER">—</span>
+    </div>
+    <div class="src-row" onclick="setSourceFilter('TAVILY',event)">
+      <div class="src-indicator idle" id="ind-TAVILY"></div>
+      <span class="src-name">Tavily AI Search</span>
+      <span class="src-cnt" id="cnt-TAVILY">—</span>
+    </div>
+    <div class="src-row" onclick="setSourceFilter('MANUAL',event)">
+      <div class="src-indicator ok" id="ind-MANUAL"></div>
+      <span class="src-name">Manual / Saved</span>
+      <span class="src-cnt" id="cnt-MANUAL">0</span>
+    </div>
+  </div>
+
+  <!-- FILTERS -->
+  <div class="sb-lbl" style="margin-top:10px">NAICS Filter</div>
+  <div class="filter-pills">
+    <div class="fp active" onclick="setNaics('all',this)">All NAICS Codes<span class="cc" id="fp-all">—</span></div>
+    <div class="fp" onclick="setNaics('621111',this)">621111 — Occ. Medicine<span class="cc" id="fp-621111">—</span></div>
+    <div class="fp" onclick="setNaics('812990',this)">812990 — Drug Testing<span class="cc" id="fp-812990">—</span></div>
+    <div class="fp" onclick="setNaics('621999',this)">621999 — Allied Health<span class="cc" id="fp-621999">—</span></div>
+  </div>
+
+  <div class="sb-lbl" style="margin-top:8px">Set-Aside Type</div>
+  <div class="filter-pills">
+    <div class="fp active" onclick="setSetAside('all',this)">All Types<span class="cc">—</span></div>
+    <div class="fp" onclick="setSetAside('SBA',this)">Small Business<span class="cc">—</span></div>
+    <div class="fp" onclick="setSetAside('8A',this)">8(a) Program<span class="cc">—</span></div>
+    <div class="fp" onclick="setSetAside('WOSB',this)">WOSB<span class="cc">—</span></div>
+    <div class="fp" onclick="setSetAside('NONE',this)">Unrestricted<span class="cc">—</span></div>
+  </div>
+  <!-- CUSTOM KEYWORDS -->
+  <div class="sb-lbl" style="margin-top:8px">Custom Keywords</div>
+  <div style="padding:0 12px 12px">
+    <div style="display:flex;gap:6px;margin-bottom:8px">
+      <input class="api-input" id="kw-input" placeholder="e.g. CACI, Fort Bragg, MEB..." 
+        style="flex:1" onkeydown="if(event.key==='Enter')addKeyword()">
+      <button onclick="addKeyword()" style="background:var(--accent);border:none;color:#c8d8e8;border-radius:4px;padding:5px 10px;cursor:pointer;font-size:12px;font-weight:600;white-space:nowrap">+ Add</button>
+    </div>
+    <div id="kw-list" style="display:flex;flex-wrap:wrap;gap:4px"></div>
+    <div style="font-family:var(--fm);font-size:9px;color:rgba(255,255,255,.2);margin-top:8px;line-height:1.5">
+      Added to every search fetch.<br>Press Enter or click + Add.
+    </div>
+  </div>
+</aside>
+
+<main>
+  <!-- STATUS BAR -->
+  <div class="status-bar" id="status-bar">
+    <div class="status-bar-left">
+      <div class="fetch-spinner" id="spinner" style="display:none"></div>
+      <span class="sb-label">Status</span>
+      <span class="sb-msg" id="sb-msg">Click "Refresh Live Data" to fetch real opportunities from SAM.gov and USASpending.gov</span>
+    </div>
+    <span class="sb-time" id="sb-time"></span>
+    <button class="btn-refetch" onclick="fetchAllSources()" id="refetch-btn">Fetch Now</button>
+  </div>
+
+  <!-- ERROR PANEL (hidden by default) -->
+  <div class="error-notice" id="error-panel" style="display:none">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+    <div>
+      <div class="error-title" id="err-title">Fetch Error</div>
+      <div class="error-body" id="err-body"></div>
+    </div>
+  </div>
+
+  <!-- INTEL BANNER -->
+  <div class="intel">
+    <div class="intel-i">
+      <div class="intel-lbl">Live Opportunities</div>
+      <div class="intel-n b" id="ib-total">—</div>
+      <div class="intel-sub live" id="ib-src">Awaiting fetch</div>
+    </div>
+    <div class="intel-div"></div>
+    <div class="intel-i">
+      <div class="intel-lbl">Closing ≤ 30 Days</div>
+      <div class="intel-n r" id="ib-soon">—</div>
+      <div class="intel-sub" id="ib-soon-sub">—</div>
+    </div>
+    <div class="intel-div"></div>
+    <div class="intel-i">
+      <div class="intel-lbl">Federal Agencies</div>
+      <div class="intel-n" id="ib-agencies">—</div>
+      <div class="intel-sub">unique agencies</div>
+    </div>
+    <div class="intel-div"></div>
+    <div class="intel-i">
+      <div class="intel-lbl">Last Refreshed</div>
+      <div class="intel-n" style="font-size:20px;padding-top:6px" id="ib-time">—</div>
+      <div class="intel-sub" id="ib-date">never</div>
+    </div>
+  </div>
+
+  <!-- TOOLBAR -->
+  <div class="toolbar">
+    <div class="sw">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+      <input class="si" type="text" id="search" placeholder="Search title, agency, NAICS, solicitation number…" oninput="render()">
+    </div>
+    <select class="tsel" onchange="render()">
+      <option value="relevance">Sort: Relevance ★</option>
+      <option value="posted">Sort: Date Posted</option>
+      <option value="deadline">Sort: Deadline</option>
+      <option value="agency">Sort: Agency</option>
+    </select>
+    <select class="tsel" id="type-filter" onchange="render()">
+      <option value="all">All Notice Types</option>
+      <option value="Solicitation">Solicitation</option>
+      <option value="Combined">Combined Synopsis</option>
+      <option value="Presolicitation">Pre-Solicitation</option>
+      <option value="Award">Award Notice</option>
+    </select>
+  </div>
+
+  <!-- TABS -->
+  <div class="tab-bar">
+    <div class="tab active" onclick="switchTab('all',this)">All</div>
+    <div class="tab" onclick="switchTab('open',this)">Open / Active</div>
+    <div class="tab" onclick="switchTab('urgent',this)">Urgent ≤ 7 Days</div>
+    <div class="tab" onclick="switchTab('saved',this)">Saved</div>
+    <div class="tab" onclick="switchTab('federal',this)">Federal (SAM.gov)</div>
+    <div class="tab" onclick="switchTab('awards',this)">Awards (USASpending)</div>
+  </div>
+
+  <div class="rfp-list" id="rfp-list">
+    <!-- Initial state -->
+    <div class="empty">
+      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" style="opacity:.2"><circle cx="12" cy="12" r="10"/><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/></svg>
+      <h3>Ready to fetch live data</h3>
+      <p>Click <strong>Refresh Live Data</strong> above to pull real opportunities from SAM.gov and USASpending.gov</p>
+    </div>
+  </div>
+</main>
+</div>
+
+<!-- DETAIL / PROPOSAL MODAL -->
+<div class="mo" id="detail-modal">
+  <div class="md">
+    <button class="mclose" onclick="closeDetail()">×</button>
+    <div class="md-title" id="dm-title">Opportunity Detail</div>
+    <div class="md-sub" id="dm-sub"></div>
+    <div class="det-grid" id="dm-grid"></div>
+    <div style="margin-top:14px">
+      <div style="font-family:var(--fm);font-size:10px;font-weight:700;color:var(--slate2);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px">Incumbent Intelligence</div>
+      <div id="dm-incumbent" style="min-height:40px"></div>
+    </div>
+    <div class="ai-panel" id="dm-ai">
+      <div class="ai-ph">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+        <span class="ai-ptitle">AI Proposal Intelligence</span>
+        <button class="btn-copy" onclick="copyProposal()">Copy All</button>
+      </div>
+      <div id="ai-out"></div>
+    </div>
+    <div class="ma">
+      <button class="bcn" onclick="closeDetail()">Close</button>
+      <button class="bcn" id="dm-save-btn" onclick="toggleSaveFromModal()">Save Opportunity</button>
+      <button class="bcn" onclick="generateRFPOutline()" id="dm-outline-btn" style="background:#2a5a3a;color:#d0f0d8;border-color:#2a5a3a">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:4px"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+        RFP Outline
+      </button>
+      <button class="bcn" id="dm-link-btn" onclick="openSamLink()" style="background:var(--accent);color:#c8d8e8;border-color:var(--accent)">Open on SAM.gov ↗</button>
+    </div>
+  </div>
+</div>
+
+<!-- ADD MANUAL MODAL -->
+<div class="mo" id="add-modal">
+  <div class="md" style="width:560px">
+    <button class="mclose" onclick="document.getElementById('add-modal').classList.remove('open')">×</button>
+    <div class="md-title">Add Manual Opportunity</div>
+    <div class="md-sub">For non-federal sources (PlanetBids, PARMA, etc.)</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+      <div style="grid-column:span 2;display:flex;flex-direction:column;gap:5px"><label class="det-lbl">Title</label><input class="si" id="m-title" style="padding:9px 12px" placeholder="Opportunity title"></div>
+      <div style="display:flex;flex-direction:column;gap:5px"><label class="det-lbl">Agency</label><input class="si" id="m-agency" style="padding:9px 12px" placeholder="Issuing agency"></div>
+      <div style="display:flex;flex-direction:column;gap:5px"><label class="det-lbl">NAICS Code</label><input class="si" id="m-naics" style="padding:9px 12px" placeholder="621111" value="621111"></div>
+      <div style="display:flex;flex-direction:column;gap:5px"><label class="det-lbl">Deadline</label><input class="si" id="m-deadline" type="date" style="padding:9px 12px"></div>
+      <div style="display:flex;flex-direction:column;gap:5px"><label class="det-lbl">Est. Value</label><input class="si" id="m-value" style="padding:9px 12px" placeholder="$250,000"></div>
+      <div style="display:flex;flex-direction:column;gap:5px"><label class="det-lbl">Source</label><input class="si" id="m-source" style="padding:9px 12px" placeholder="PlanetBids, PARMA, etc."></div>
+      <div style="display:flex;flex-direction:column;gap:5px"><label class="det-lbl">URL</label><input class="si" id="m-url" style="padding:9px 12px" placeholder="https://..."></div>
+      <div style="grid-column:span 2;display:flex;flex-direction:column;gap:5px"><label class="det-lbl">Description</label><textarea class="si" id="m-desc" style="padding:9px 12px;min-height:80px;resize:vertical" placeholder="Scope, requirements, notes…"></textarea></div>
+    </div>
+    <div class="ma"><button class="bcn" onclick="document.getElementById('add-modal').classList.remove('open')">Cancel</button><button class="bcn" style="background:var(--navy);color:#c8d8e8;border-color:var(--navy)" onclick="addManual()">Save Opportunity</button></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<!-- RFP OUTLINE MODAL -->
+<div class="mo" id="outline-modal">
+  <div class="md" style="width:780px;max-height:90vh">
+    <button class="mclose" onclick="document.getElementById('outline-modal').classList.remove('open')">×</button>
+    <div class="md-title" id="outline-title">RFP Intelligence Brief</div>
+    <div class="md-sub" id="outline-sub"></div>
+    <div id="outline-content" style="margin-top:16px;max-height:calc(90vh - 200px);overflow-y:auto"></div>
+    <div class="ma" style="margin-top:16px">
+      <button class="bcn" onclick="document.getElementById('outline-modal').classList.remove('open')">Close</button>
+      <button class="bcn" onclick="copyOutline()" id="copy-outline-btn">Copy to Clipboard</button>
+    </div>
+  </div>
+</div>
+
+<!-- TEAMING RADAR MODAL -->
+<div class="mo" id="teaming-modal">
+  <div class="md" style="width:720px;max-height:85vh">
+    <button class="mclose" onclick="document.getElementById('teaming-modal').classList.remove('open')">×</button>
+    <div class="md-title">Teaming Radar</div>
+    <div class="md-sub">Find contractors with existing occupational health contracts — potential teaming partners or competitors</div>
+    <div style="display:flex;gap:10px;margin-bottom:16px;align-items:flex-end">
+      <div style="flex:1">
+        <label class="det-lbl" style="margin-bottom:5px;display:block">State</label>
+        <select id="teaming-state" class="tsel" style="width:100%;padding:9px 11px">
+          <option value="">All States</option>
+          <option value="TX">Texas</option><option value="CA">California</option>
+          <option value="VA">Virginia</option><option value="FL">Florida</option>
+          <option value="GA">Georgia</option><option value="NC">North Carolina</option>
+          <option value="MD">Maryland</option><option value="CO">Colorado</option>
+          <option value="WA">Washington</option><option value="AZ">Arizona</option>
+          <option value="NY">New York</option><option value="IL">Illinois</option>
+          <option value="PA">Pennsylvania</option><option value="OH">Ohio</option>
+          <option value="LA">Louisiana</option><option value="MS">Mississippi</option>
+          <option value="AL">Alabama</option><option value="SC">South Carolina</option>
+          <option value="OK">Oklahoma</option><option value="KY">Kentucky</option>
+        </select>
+      </div>
+      <div style="flex:1">
+        <label class="det-lbl" style="margin-bottom:5px;display:block">NAICS Code</label>
+        <select id="teaming-naics" class="tsel" style="width:100%;padding:9px 11px">
+          <option value="621111">621111 — Occupational Medicine</option>
+          <option value="812990">812990 — Drug Testing</option>
+          <option value="621999">621999 — Allied Health</option>
+          <option value="621610">621610 — Home Health</option>
+        </select>
+      </div>
+      <button onclick="searchTeaming()" style="background:var(--accent);color:#c8d8e8;border:none;border-radius:6px;padding:10px 20px;font-family:var(--fb);font-weight:600;font-size:13px;cursor:pointer;white-space:nowrap">Search</button>
+    </div>
+    <div id="teaming-results" style="max-height:450px;overflow-y:auto"></div>
+  </div>
+</div>
+
+<script>
+// ── CONFIG ─────────────────────────────────────────────────────────
+// API key is now stored in backend .env — no longer exposed in browser
+const DAYS_BACK = () => parseInt(document.getElementById('days-back').value) || 90;
+
+// ── BACKEND CONFIG ──────────────────────────────────────────────────
+// Point this at your deployed backend URL.
+// Local dev:  http://localhost:3001
+// Production: https://your-app.onrender.com  (set after deploying to Render)
+// ── STATE ─────────────────────────────────────────────────────────
+let allOpps    = [];   // live fetched
+let manualOpps = [];   // hand-entered
+let savedIds   = new Set(JSON.parse(localStorage.getItem('om_saved')||'[]'));
+let currTab    = 'all';
+let customKeywords = JSON.parse(localStorage.getItem('om_keywords') || '[]');
+  window.GEMINI_KEY = localStorage.getItem('om_gemini_key') || '';
+  const ck = document.getElementById('claude-api-key');
+  if(ck && window.GEMINI_KEY) ck.value = window.GEMINI_KEY;
+let srcFilter  = 'all';
+let naicsFilter= 'all';
+let setAsideFilter = 'all';
+let detailOpp  = null;
+let fetchErrors= [];
+
+// ── DATE HELPERS ───────────────────────────────────────────────────
+function dateStr(d) {
+  if(!d) return null;
+  // SAM returns "2026-03-15T00:00:00-05:00" or "03/15/2026"
+  const parsed = new Date(d);
+  return isNaN(parsed) ? null : parsed;
+}
+function daysUntil(d) {
+  if(!d) return null;
+  const parsed = d instanceof Date ? d : new Date(d);
+  if(isNaN(parsed)) return null;
+  return Math.ceil((parsed - new Date()) / 86400000);
+}
+function fmtDate(d) {
+  if(!d) return 'N/A';
+  const parsed = d instanceof Date ? d : new Date(d);
+  if(isNaN(parsed)) return 'N/A';
+  return parsed.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+}
+function getDateRange() {
+  const to = new Date();
+  const from = new Date(); from.setDate(from.getDate() - DAYS_BACK());
+  const fmt = d => (d.getMonth()+1).toString().padStart(2,'0')+'/'+d.getDate().toString().padStart(2,'0')+'/'+d.getFullYear();
+  return { from: fmt(from), to: fmt(to) };
+}
+
+// ── SET STATUS ─────────────────────────────────────────────────────
+function setStatus(msg, state='idle') {
+  document.getElementById('sb-msg').textContent = msg;
+  const dot = document.getElementById('live-dot');
+  dot.className = 'live-dot' + (state==='fetching'?' fetching':state==='error'?' error':'');
+  document.getElementById('spinner').style.display = state==='fetching' ? 'block' : 'none';
+  document.getElementById('live-status').textContent = state==='fetching'?'Fetching…':state==='error'?'Error':'Live';
+  document.getElementById('fetch-btn').disabled = state==='fetching';
+  document.getElementById('refetch-btn').disabled = state==='fetching';
+}
+function showError(title, body) {
+  const p = document.getElementById('error-panel');
+  p.style.display='flex';
+  document.getElementById('err-title').textContent=title;
+  document.getElementById('err-body').innerHTML=body;
+}
+function hideError() { document.getElementById('error-panel').style.display='none'; }
+
+// ── FETCH ALL ─────────────────────────────────────────────────────
+async function fetchAllSources(forceRefresh = false) {
+  hideError(); fetchErrors=[];
+  srcFilter = 'all';
+  document.querySelectorAll('.src-row').forEach(r=>r.classList.remove('active'));
+  const allRow = document.getElementById('src-row-all');
+  if(allRow) allRow.classList.add('active');
+  setStatus('Fetching live data…','fetching');
+  setInd('all','fetching');
+  showSkeletons();
+
+  const base = document.getElementById('backend-url').value.trim() || 'https://occu-med-backend.onrender.com';
+  const refreshParam = forceRefresh ? '&refresh=true' : '';
+  if (forceRefresh) {
+    const cb = document.getElementById('cache-badge');
+    if (cb) cb.style.display = 'none';
+    showToast('Forcing live fetch — bypassing cache...', 'ok');
+  }
+  const days = document.getElementById('days-back').value || 90;
+  // Custom keywords filter client-side (see filterByKeywords below) — not sent to server
+
+  async function fetchSource(endpoint, srcKey) {
+    setInd(srcKey, 'fetching');
+    try {
+      const resp = await fetch(`${base}${endpoint}?days=${days}${endpoint==='/api/opportunities'?refreshParam:''}`);
+      if(!resp.ok) { const e = await resp.json().catch(()=>({error:resp.statusText})); throw new Error(e.error||`HTTP ${resp.status}`); }
+      const data = await resp.json();
+      const opps = data.data || [];
+      // Show cache badge if response came from Redis cache
+      if (data.fromCache && srcKey === 'SAM') {
+        const cb = document.getElementById('cache-badge');
+        if (cb) {
+          cb.style.display = 'inline-flex';
+          const cAt = data.cachedAt ? new Date(data.cachedAt).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'}) : '';
+          cb.title = 'Data cached at ' + cAt;
+        }
+      }
+      setInd(srcKey, opps.length > 0 ? 'ok' : 'idle');
+      document.getElementById('cnt-'+srcKey).textContent = opps.length || '0';
+      return opps;
+    } catch(e) {
+      setInd(srcKey, 'error');
+      fetchErrors.push(srcKey+': '+e.message);
+      document.getElementById('cnt-'+srcKey).textContent = 'Err';
+      return [];
+    }
+  }
+
+  let samOpps=[], idvOpps=[], tangoOpps=[], aiSearchOpps=[], tavilyOpps=[], serperOpps=[];
+  [samOpps, idvOpps, tangoOpps, aiSearchOpps] = await Promise.all([
+    fetchSource('/api/sam',       'SAM'),
+    fetchSource('/api/idv',       'IDV'),
+    fetchSource('/api/tango',     'TANGO'),
+    fetchSource('/api/ai-search', 'AI-SEARCH'),
+  ]);
+  // Split combined AI search results by source tag
+  tavilyOpps  = aiSearchOpps.filter(o => o.source === 'TAVILY');
+  serperOpps  = aiSearchOpps.filter(o => o.source === 'SERPER');
+  aiSearchOpps = aiSearchOpps.filter(o => o.source === 'AI-SEARCH');
+  // Update individual AI source badges
+  const tavilyEl = document.getElementById('cnt-TAVILY');
+  if (tavilyEl) tavilyEl.textContent = tavilyOpps.length || '0';
+  const tavilyInd = document.getElementById('ind-TAVILY');
+  if (tavilyInd) tavilyInd.className = 'src-indicator ' + (tavilyOpps.length > 0 ? 'ok' : 'idle');
+  const serperEl = document.getElementById('cnt-SERPER');
+  if (serperEl) serperEl.textContent = serperOpps.length || '0';
+  const serperInd = document.getElementById('ind-SERPER');
+  if (serperInd) serperInd.className = 'src-indicator ' + (serperOpps.length > 0 ? 'ok' : 'idle');
+  allOpps = [...samOpps,...idvOpps,...tangoOpps,...aiSearchOpps,...tavilyOpps,...serperOpps];
+  allOpps.forEach(o => { o.saved = savedIds.has(o.id); });
+
+  // Apply custom keyword filter client-side — searches title, agency, desc, naics
+  if (customKeywords.length > 0) {
+    const kwLower = customKeywords.map(k => k.toLowerCase());
+    allOpps = allOpps.filter(o => {
+      const hay = [o.title, o.agency, o.desc, o.naicsCode, o.naicsDesc, o.state, o.city, o.solNum].join(' ').toLowerCase();
+      return kwLower.some(kw => hay.includes(kw));
+    });
+    console.log(`Custom keyword filter (${customKeywords.join(', ')}): ${allOpps.length} results`);
+  }
+
+  const now = new Date();
+  const displayCount = customKeywords.length > 0 ? allOpps.length : allOpps.length + manualOpps.length;
+  document.getElementById('cnt-all').textContent = displayCount;
+  // State portals share one counter — count any STATE-* source
+  document.getElementById('cnt-MANUAL').textContent = manualOpps.length;
+
+  const activeSources = [samOpps,idvOpps,tangoOpps,aiSearchOpps,tavilyOpps,serperOpps].filter(s=>s.length>0).length;
+  if(fetchErrors.length > 0 && allOpps.length === 0) {
+    setStatus('Fetch failed — check backend is running','error');
+    setInd('all','error');
+    showError('Could not fetch live data',
+      fetchErrors.map(e=>`<div style="margin-bottom:6px">• ${e}</div>`).join('') +
+      `<div style="margin-top:10px;padding:10px;background:var(--amber-dim);border-radius:5px;border:1px solid rgba(122,79,31,.2)">
+        Make sure your backend is running: <code>SAM_API_KEY=... node server.js</code>
+      </div>`);
+  } else {
+    setStatus(`Fetched ${allOpps.length} opportunities across ${activeSources} live source${activeSources!==1?'s':''}`, fetchErrors.length?'idle':'idle');
+    setInd('all','ok');
+  }
+
+  document.getElementById('ib-time').textContent = now.getHours()+':'+String(now.getMinutes()).padStart(2,'0');
+  document.getElementById('ib-date').textContent = now.toLocaleDateString('en-US',{month:'short',day:'numeric'});
+  document.getElementById('sb-time').textContent = 'Last fetched: '+now.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});
+  render(); updateBanner();
+}
+
+// ── CUSTOM KEYWORDS ──────────────────────────────────────────────
+function addKeyword() {
+  const input = document.getElementById('kw-input');
+  const val = input.value.trim();
+  if(!val) return;
+  if(customKeywords.includes(val)) { showToast('Already added','err'); return; }
+  customKeywords.push(val);
+  localStorage.setItem('om_keywords', JSON.stringify(customKeywords));
+  input.value = '';
+  renderKeywordTags();
+  showToast('Keyword added — results filtered instantly');
+  render(); // re-render immediately with new filter
+}
+
+function removeKeyword(kw) {
+  customKeywords = customKeywords.filter(k => k !== kw);
+  localStorage.setItem('om_keywords', JSON.stringify(customKeywords));
+  renderKeywordTags();
+  showToast('Keyword removed');
+  render(); // re-render immediately
+}
+
+function renderKeywordTags() {
+  const list = document.getElementById('kw-list');
+  if(!list) return;
+  if(customKeywords.length === 0) {
+    list.innerHTML = '<span style="font-family:var(--fm);font-size:10px;color:rgba(255,255,255,.2)">No custom keywords yet</span>';
+    return;
+  }
+  list.innerHTML = customKeywords.map(kw =>
+    `<span class="kw-tag">${kw}<button onclick="removeKeyword('${kw.replace(/'/g,"\'")}')" title="Remove">×</button></span>`
+  ).join('');
+}
+
+
+// ── RFP OUTLINE GENERATOR ────────────────────────────────────────────────────
+async function generateRFPOutline() {
+  if (!detailOpp) return;
+  const o = detailOpp;
+
+  // Show modal with loading state
+  document.getElementById('outline-title').textContent = 'RFP Intelligence Brief';
+  document.getElementById('outline-sub').textContent = o.title;
+  document.getElementById('outline-content').innerHTML = `
+    <div class="outline-loading">
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" style="animation:spin .8s linear infinite;display:block;margin:0 auto 12px"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/></svg>
+      Generating intelligence brief...
+    </div>`;
+  document.getElementById('outline-modal').classList.add('open');
+
+  const prompt = `You are an expert federal government contracting analyst specializing in occupational health, drug testing, and DoD contractor medical services. 
+
+Generate a thorough, structured intelligence brief for this procurement opportunity. Be specific, actionable, and focused on what Occu-Med (an occupational health company that provides pre-deployment physicals, drug testing, medical surveillance, and fitness-for-duty evaluations for DoD contractors) needs to know.
+
+OPPORTUNITY DATA:
+Title: ${o.title}
+Agency: ${o.agency}
+Notice Type: ${o.noticeType}
+NAICS: ${o.naicsCode} ${o.naicsDesc || ''}
+Set-Aside: ${o.setAside || 'None specified'}
+Posted: ${o.postedDate ? new Date(o.postedDate).toLocaleDateString() : 'Unknown'}
+Deadline: ${o.deadline ? new Date(o.deadline).toLocaleDateString() + ' (' + (daysUntil(o.deadline) || '?') + ' days)' : 'Unknown'}
+State/Location: ${o.state || 'Not specified'} ${o.city || ''}
+Contract Value: ${o.awardAmount > 0 ? '$' + Number(o.awardAmount).toLocaleString() : 'Not specified'}
+Solicitation #: ${o.solNum || 'N/A'}
+Source: ${o.source}
+Description: ${(o.desc || 'No description available').substring(0, 1500)}
+
+Generate a JSON response with exactly this structure (respond with ONLY valid JSON, no markdown):
+{
+  "executive_summary": "2-3 sentence summary of what this is and why it matters to Occu-Med",
+  "relevance_score": <number 1-10>,
+  "relevance_rationale": "Why this scored that way",
+  "scope_of_work": ["bullet 1", "bullet 2", "bullet 3 etc — what services are being sought"],
+  "key_requirements": ["requirement 1", "requirement 2 etc — qualifications, certifications, past performance needed"],
+  "red_flags": ["any concerns, disqualifiers, or risks"],
+  "opportunities": ["why Occu-Med is well positioned", "competitive advantages to highlight"],
+  "set_aside_analysis": "Analysis of the set-aside type and what it means for Occu-Med's eligibility",
+  "pricing_strategy": "Guidance on how to approach pricing for this type of contract",
+  "timeline": ["key dates and what needs to happen by when"],
+  "recommended_action": "GO | NO-GO | MONITOR",
+  "action_rationale": "Specific next steps if GO, or why NO-GO/MONITOR",
+  "teaming_needed": <boolean>,
+  "teaming_notes": "If teaming needed, what capabilities to look for in a partner"
+}`;
+
+  try {
+    const resp = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${window.GEMINI_KEY||''}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { maxOutputTokens: 1500, temperature: 0.3 }
+        })
+      }
+    );
+    const data = await resp.json();
+    if (data.error) throw new Error(data.error.message);
+    const raw = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    
+    // Parse JSON response
+    const clean = raw.replace(/```json|```/g, '').trim();
+    const brief = JSON.parse(clean);
+    
+    renderOutline(brief, o);
+  } catch(e) {
+    document.getElementById('outline-content').innerHTML = `
+      <div style="padding:20px;font-family:var(--fm);font-size:12px;color:var(--rose)">
+        Error generating brief: ${e.message}<br><br>
+        <span style="color:var(--slate)">Try opening the full solicitation on SAM.gov for details.</span>
+      </div>`;
+  }
+}
+
+function renderOutline(b, o) {
+  const actionColor = b.recommended_action === 'GO' ? 'green' : b.recommended_action === 'NO-GO' ? 'red' : 'amber';
+  const scoreColor = b.relevance_score >= 7 ? 'green' : b.relevance_score >= 4 ? 'amber' : 'red';
+
+  const el = document.getElementById('outline-content');
+  el.innerHTML = `
+    <!-- Header badges -->
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;align-items:center">
+      <span class="outline-tag ${actionColor}" style="font-size:13px;padding:5px 14px">
+        ${b.recommended_action === 'GO' ? '✓' : b.recommended_action === 'NO-GO' ? '✗' : '◐'} ${b.recommended_action}
+      </span>
+      <span class="outline-tag ${scoreColor}">Relevance ${b.relevance_score}/10</span>
+      ${b.teaming_needed ? '<span class="outline-tag amber">⚑ Teaming Required</span>' : '<span class="outline-tag green">Solo Bid Possible</span>'}
+    </div>
+
+    <!-- Executive Summary -->
+    <div class="outline-section">
+      <div class="outline-section-title">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        Executive Summary
+      </div>
+      <div class="outline-section-body">${b.executive_summary}</div>
+    </div>
+
+    <!-- Scope of Work -->
+    <div class="outline-section">
+      <div class="outline-section-title">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        Scope of Work
+      </div>
+      <div class="outline-section-body"><ul>${(b.scope_of_work||[]).map(i=>`<li>${i}</li>`).join('')}</ul></div>
+    </div>
+
+    <!-- Key Requirements -->
+    <div class="outline-section">
+      <div class="outline-section-title">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
+        Key Requirements
+      </div>
+      <div class="outline-section-body"><ul>${(b.key_requirements||[]).map(i=>`<li>${i}</li>`).join('')}</ul></div>
+    </div>
+
+    <!-- Opportunities & Red Flags side by side -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="outline-section" style="border-left:3px solid #2a8a4a">
+        <div class="outline-section-title" style="color:#2a8a4a">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+          Occu-Med Advantages
+        </div>
+        <div class="outline-section-body"><ul>${(b.opportunities||[]).map(i=>`<li>${i}</li>`).join('')}</ul></div>
+      </div>
+      <div class="outline-section" style="border-left:3px solid var(--rose)">
+        <div class="outline-section-title" style="color:var(--rose)">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          Red Flags / Risks
+        </div>
+        <div class="outline-section-body">${(b.red_flags||[]).length ? `<ul>${b.red_flags.map(i=>`<li>${i}</li>`).join('')}</ul>` : '<span style="color:var(--slate)">None identified</span>'}</div>
+      </div>
+    </div>
+
+    <!-- Set-Aside + Pricing -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="outline-section">
+        <div class="outline-section-title">Set-Aside Analysis</div>
+        <div class="outline-section-body">${b.set_aside_analysis}</div>
+      </div>
+      <div class="outline-section">
+        <div class="outline-section-title">Pricing Strategy</div>
+        <div class="outline-section-body">${b.pricing_strategy}</div>
+      </div>
+    </div>
+
+    <!-- Timeline -->
+    ${b.timeline?.length ? `
+    <div class="outline-section">
+      <div class="outline-section-title">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+        Key Dates & Timeline
+      </div>
+      <div class="outline-section-body"><ul>${b.timeline.map(i=>`<li>${i}</li>`).join('')}</ul></div>
+    </div>` : ''}
+
+    <!-- Recommended Action -->
+    <div class="outline-section" style="border:2px solid ${actionColor==='green'?'#2a8a4a':actionColor==='red'?'var(--rose)':'var(--amber)'}">
+      <div class="outline-section-title" style="color:${actionColor==='green'?'#2a8a4a':actionColor==='red'?'var(--rose)':'var(--amber)'}">
+        Recommended Action: ${b.recommended_action}
+      </div>
+      <div class="outline-section-body">${b.action_rationale}</div>
+      ${b.teaming_needed && b.teaming_notes ? `<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--bdr);font-size:12px;color:var(--slate)"><strong>Teaming:</strong> ${b.teaming_notes}</div>` : ''}
+    </div>
+  `;
+}
+
+function copyOutline() {
+  const el = document.getElementById('outline-content');
+  navigator.clipboard.writeText(el.innerText).then(() => showToast('Brief copied to clipboard', 'ok'));
+}
+
+// ── RELEVANCE SCORING ENGINE ─────────────────────────────────────────────────
+const RELEVANCE_WEIGHTS = {
+  'occupational health':20,'occupational medicine':20,
+  'pre-employment':18,'pre deployment':18,'pre-deployment':18,
+  'fit for duty':18,'fitness for duty':18,
+  'drug testing':16,'drug and alcohol':16,'substance abuse testing':16,
+  'medical surveillance':15,'audiometric':15,'hearing conservation':15,
+  'deployment medical':15,'force health':14,
+  'employee health':12,'workplace health':12,'occupational':10,
+  'medical exam':10,'physical exam':10,'health screening':10,
+  'workers compensation':9,'work comp':9,
+  'mro':12,'medical review officer':14,
+  'department of defense':8,'dod':8,'army':7,'navy':7,'air force':7,
+  'marine corps':7,'national guard':7,'contractor':6,'deploying':8,
+  'overseas':7,'oconus':9,'combat':6,
+  'concentra':10,'us healthworks':10,'mhnet':8,'triwest':8,
+  'construction':-5,'it services':-3,'software':-3,
+  'janitorial':-5,'landscaping':-5,'food service':-5,
+};
+function scoreRelevance(o) {
+  const text = [o.title,o.desc,o.agency,o.noticeType].join(' ').toLowerCase();
+  let score = 0;
+  for (const [kw,weight] of Object.entries(RELEVANCE_WEIGHTS)) { if(text.includes(kw)) score+=weight; }
+  if(o.naicsCode==='621111') score+=20;
+  else if(o.naicsCode==='812990') score+=15;
+  else if(o.naicsCode==='621999') score+=10;
+  if(o.source==='SAM') score+=10;
+  if(o.source==='IDV') score+=8;
+  if(o.source==='TANGO') score+=6;
+  const days=daysUntil(o.deadline);
+  if(days!==null&&days>=0&&days<=7) score+=10;
+  else if(days!==null&&days<=30) score+=5;
+  if(o.awardAmount>1000000) score+=5;
+  if(o.awardAmount>5000000) score+=5;
+  if(o.setAsideCode) score+=5;
+  return Math.min(100,Math.max(0,score));
+}
+function getRelevanceLabel(score) {
+  if(score>=70) return {label:'High Match',cls:'rel-high'};
+  if(score>=40) return {label:'Possible Match',cls:'rel-med'};
+  if(score>=15) return {label:'Low Match',cls:'rel-low'};
+  return {label:'',cls:'rel-none'};
+}
+function extractEstValue(desc) {
+  if(!desc) return null;
+  const m = desc.match(/\$[\d,]+(?:\.\d+)?(?:\s*(?:million|billion|M|B))?/i);
+  if(!m) return null;
+  let val = m[0].replace(/[$,]/g,'').toLowerCase();
+  let num = parseFloat(val);
+  if(val.includes('billion')||val.includes('b')) num*=1000000000;
+  else if(val.includes('million')||val.includes('m')) num*=1000000;
+  if(num>10000) return num.toLocaleString('en-US',{notation:'compact',maximumFractionDigits:1});
+  return null;
+}
+
+
+// ── INCUMBENT TRACKER ────────────────────────────────────────────────────────
+async function fetchIncumbent(opp) {
+  const incumbentEl = document.getElementById('dm-incumbent');
+  if(!incumbentEl) return;
+  incumbentEl.innerHTML = '<div style="font-family:var(--fm);font-size:11px;color:var(--slate)">Looking up incumbent...</div>';
+
+  try {
+    const base = document.getElementById('backend-url').value.trim() || 'https://occu-med-backend.onrender.com';
+  const refreshParam = forceRefresh ? '&refresh=true' : '';
+  if (forceRefresh) {
+    const cb = document.getElementById('cache-badge');
+    if (cb) cb.style.display = 'none';
+    showToast('Forcing live fetch — bypassing cache...', 'ok');
+  }
+    const params = new URLSearchParams({
+      naics: opp.naicsCode || '621111',
+      agency: opp.agency || '',
+      state: opp.state || '',
+    });
+    const resp = await fetch(`${base}/api/incumbent?${params}`);
+    const data = await resp.json();
+    const contracts = data.data || [];
+
+    if (!contracts.length) {
+      incumbentEl.innerHTML = '<div style="font-family:var(--fm);font-size:11px;color:var(--slate)">No incumbent data found — may be a new requirement</div>';
+      return;
+    }
+
+    incumbentEl.innerHTML = `
+      <div style="font-family:var(--fm);font-size:10px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px">
+        Current/Recent Incumbents
+      </div>
+      ${contracts.slice(0,5).map(c => `
+        <div style="padding:8px 10px;background:var(--bg2);border:1px solid var(--bdr);border-radius:6px;margin-bottom:6px">
+          <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:3px">${c.recipient}</div>
+          <div style="display:flex;gap:12px;flex-wrap:wrap">
+            <span style="font-family:var(--fm);font-size:11px;color:var(--slate)">$${Number(c.amount||0).toLocaleString()}</span>
+            ${c.endDate?`<span style="font-family:var(--fm);font-size:11px;color:var(--slate)">Ends: ${c.endDate}</span>`:''}
+            ${c.solNum?`<span style="font-family:var(--fm);font-size:11px;color:var(--slate2)">#${c.solNum}</span>`:''}
+          </div>
+        </div>
+      `).join('')}
+    `;
+  } catch(e) {
+    incumbentEl.innerHTML = '<div style="font-family:var(--fm);font-size:11px;color:var(--slate)">Could not load incumbent data</div>';
+  }
+}
+
+
+// ── EXPORT TO EXCEL ──────────────────────────────────────────────────────────
+function exportToCSV() {
+  const all = [...allOpps, ...manualOpps];
+  const q = (document.getElementById('search').value||'').toLowerCase();
+  
+  // Apply current filters
+  // Apply custom keyword filter
+  const kwActive = customKeywords.map(k => k.toLowerCase()).filter(Boolean);
+  const kwFiltered = kwActive.length > 0
+    ? all.filter(o => {
+        const hay = [o.title, o.agency, o.desc, o.naicsCode, o.naicsDesc, o.state, o.city, o.solNum].join(' ').toLowerCase();
+        return kwActive.some(kw => hay.includes(kw));
+      })
+    : all;
+
+  let list = kwFiltered.filter(o => {
+    if(srcFilter!=='all' && o.source!==srcFilter) return false;
+    if(naicsFilter!=='all' && o.naicsCode!==naicsFilter) return false;
+    if(q) {
+      const hay=[o.title,o.agency,o.solNum,o.naicsCode,o.state].join(' ').toLowerCase();
+      if(!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
+  // Score them
+  list.forEach(o => { if(o._score===undefined) o._score=scoreRelevance(o); });
+  list.sort((a,b)=>(b._score||0)-(a._score||0));
+
+  const headers = ['Relevance Score','Title','Agency','Source','NAICS','State','Notice Type','Set-Aside','Posted Date','Deadline','Contract Value','Solicitation #','Description','URL'];
+  const rows = list.map(o => [
+    o._score||0,
+    (o.title||'').replace(/,/g,';'),
+    (o.agency||'').replace(/,/g,';'),
+    o.source||'',
+    o.naicsCode||'',
+    o.state||'',
+    o.noticeType||'',
+    o.setAside||'',
+    o.postedDate ? new Date(o.postedDate).toLocaleDateString() : '',
+    o.deadline ? new Date(o.deadline).toLocaleDateString() : '',
+    o.awardAmount > 0 ? '$'+Number(o.awardAmount).toLocaleString() : '',
+    o.solNum||'',
+    (o.desc||'').substring(0,300).replace(/,/g,';').replace(/\n/g,' '),
+    o.uiLink||''
+  ]);
+
+  const csv = [headers, ...rows].map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
+  const blob = new Blob([csv], {type:'text/csv'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `occu-med-rfp-${new Date().toISOString().split('T')[0]}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast(`Exported ${list.length} opportunities`, 'ok');
+}
+
+
+// ── TEAMING RADAR ────────────────────────────────────────────────────────────
+let teamingModal = null;
+
+async function openTeamingRadar() {
+  const modal = document.getElementById('teaming-modal');
+  modal.classList.add('open');
+  const resultsEl = document.getElementById('teaming-results');
+  const stateEl = document.getElementById('teaming-state');
+  const naicsEl = document.getElementById('teaming-naics');
+  resultsEl.innerHTML = '<div style="font-family:var(--fm);font-size:12px;color:var(--slate);padding:20px;text-align:center">Select a state and click Search</div>';
+}
+
+async function searchTeaming() {
+  const state = document.getElementById('teaming-state').value;
+  const naics = document.getElementById('teaming-naics').value;
+  const resultsEl = document.getElementById('teaming-results');
+  resultsEl.innerHTML = '<div style="font-family:var(--fm);font-size:12px;color:var(--slate);padding:20px;text-align:center">Searching USASpending...</div>';
+
+  try {
+    const base = document.getElementById('backend-url').value.trim() || 'https://occu-med-backend.onrender.com';
+  const refreshParam = forceRefresh ? '&refresh=true' : '';
+  if (forceRefresh) {
+    const cb = document.getElementById('cache-badge');
+    if (cb) cb.style.display = 'none';
+    showToast('Forcing live fetch — bypassing cache...', 'ok');
+  }
+    const resp = await fetch(`${base}/api/teaming?state=${state}&naics=${naics}`);
+    const data = await resp.json();
+    const contractors = data.data || [];
+
+    if (!contractors.length) {
+      resultsEl.innerHTML = '<div style="font-family:var(--fm);font-size:12px;color:var(--slate);padding:20px;text-align:center">No contractors found for these criteria</div>';
+      return;
+    }
+
+    resultsEl.innerHTML = `
+      <div style="font-family:var(--fm);font-size:10px;color:var(--slate2);margin-bottom:12px">${contractors.length} contractors with recent occ health contracts in ${state||'all states'}</div>
+      ${contractors.map((c,i) => `
+        <div style="padding:10px 14px;background:var(--card);border:1px solid var(--bdr);border-radius:7px;margin-bottom:8px;display:flex;align-items:center;gap:12px">
+          <div style="font-family:var(--fm);font-size:11px;color:var(--slate2);min-width:24px">#${i+1}</div>
+          <div style="flex:1">
+            <div style="font-size:14px;font-weight:600;color:var(--navy);margin-bottom:2px">${c.name}</div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap">
+              <span style="font-family:var(--fm);font-size:11px;color:var(--slate)">$${Number(c.totalAmount||0).toLocaleString()} total</span>
+              <span style="font-family:var(--fm);font-size:11px;color:var(--slate)">${c.contractCount} contract${c.contractCount!==1?'s':''}</span>
+              ${c.latestEnd?`<span style="font-family:var(--fm);font-size:11px;color:var(--slate)">Latest end: ${c.latestEnd}</span>`:''}
+            </div>
+          </div>
+          <div style="display:flex;gap:6px">
+            <button onclick="navigator.clipboard.writeText('${c.name.replace(/'/g,"\'")}').then(()=>showToast('Copied','ok'))" 
+              style="background:var(--bg2);border:1px solid var(--bdr);border-radius:4px;padding:5px 8px;cursor:pointer;font-family:var(--fm);font-size:10px;color:var(--slate)">Copy</button>
+            <a href="https://www.usaspending.gov/recipient/${encodeURIComponent(c.name)}/" target="_blank"
+              style="background:var(--accent);color:#c8d8e8;border:none;border-radius:4px;padding:5px 8px;cursor:pointer;font-family:var(--fm);font-size:10px;text-decoration:none">USASpending ↗</a>
+          </div>
+        </div>
+      `).join('')}
+    `;
+  } catch(e) {
+    resultsEl.innerHTML = `<div style="font-family:var(--fm);font-size:12px;color:var(--rose);padding:20px">Error: ${e.message}</div>`;
+  }
+}
+
+// ── RENDER ─────────────────────────────────────────────────────────
+function render() {
+  const q = (document.getElementById('search').value||'').toLowerCase();
+  const sort = document.querySelector('.tsel').value;
+  const typeFilter = document.getElementById('type-filter').value;
+  const all = [...allOpps, ...manualOpps];
+
+  let list = all.filter(o => {
+    // Always filter out expired items (past deadline) unless explicitly saved
+    const d = daysUntil(o.deadline);
+    if(!o.saved && d !== null && d < 0) return false;
+    if(currTab==='open' && !o.active && o.source!=='MANUAL') return false;
+    if(currTab==='urgent' && (daysUntil(o.deadline)===null || daysUntil(o.deadline)>7)) return false;
+    if(currTab==='saved' && !o.saved) return false;
+    if(currTab==='federal' && !['SAM','IDV','TANGO'].includes(o.source)) return false;
+    if(currTab==='awards' && !['IDV'].includes(o.source)) return false;
+    if(srcFilter!=='all' && o.source!==srcFilter) return false;
+    if(naicsFilter!=='all' && o.naicsCode!==naicsFilter) return false;
+    if(setAsideFilter!=='all') {
+      if(setAsideFilter==='NONE' && o.setAsideCode) return false;
+      if(setAsideFilter!=='NONE' && !o.setAsideCode?.includes(setAsideFilter)) return false;
+    }
+    if(typeFilter!=='all') {
+      const t=(o.noticeType||'').toLowerCase();
+      if(typeFilter==='Solicitation' && !t.includes('solicitation')) return false;
+      if(typeFilter==='Combined' && !t.includes('combined')) return false;
+      if(typeFilter==='Presolicitation' && !t.includes('presolicitation')&&!t.includes('pre-solicitation')) return false;
+      if(typeFilter==='Award' && !t.includes('award')) return false;
+    }
+    if(q) {
+      const hay = [o.title,o.agency,o.solNum,o.naicsCode,o.naicsDesc,o.state,o.noticeType].join(' ').toLowerCase();
+      if(!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
+  // Score and annotate each result
+  list.forEach(o => {
+    if (o._score === undefined) {
+      o._score = scoreRelevance(o);
+      o.estValue = o.estValue || extractEstValue(o.desc);
+    }
+  });
+
+  list.sort((a,b) => {
+    if(sort==='relevance') return (b._score||0) - (a._score||0);
+    if(sort==='deadline') {
+      const da = a.deadline ? new Date(a.deadline) : null;
+      const db = b.deadline ? new Date(b.deadline) : null;
+      if(!da && !db) return 0;
+      if(!da) return 1; if(!db) return -1;
+      return da - db;
+    }
+    if(sort==='posted') {
+      const da = a.postedDate ? new Date(a.postedDate) : null;
+      const db = b.postedDate ? new Date(b.postedDate) : null;
+      if(!da && !db) return 0;
+      if(!da) return 1; if(!db) return -1;
+      return db - da;
+    }
+    if(sort==='agency') return (a.agency||'').localeCompare(b.agency||'');
+    return 0;
+  });
+
+  const el = document.getElementById('rfp-list');
+  if(!list.length) {
+    el.innerHTML = allOpps.length===0
+      ? '<div class="empty"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" style="opacity:.2"><circle cx="12" cy="12" r="10"/><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/></svg><h3>No live data yet</h3><p>Click <strong>Refresh Live Data</strong> to fetch real opportunities from SAM.gov and USASpending.gov</p></div>'
+      : '<div class="empty"><h3>No results match your filters</h3><p>Try clearing search or changing filters.</p></div>';
+    return;
+  }
+
+  el.innerHTML = list.map((o,i) => {
+    const days = daysUntil(o.deadline);
+    const isActive = days === null || days > 0;
+    const dlc = days===null?'na':days<=0?'ug':days<=7?'ug':days<=30?'wn':'sf';
+    const dll = days===null?'No deadline':days<=0?'CLOSED':days===1?'1 day left':days<=30?days+' days':fmtDate(o.deadline);
+    const borderCls = days!==null&&days<=7?'urgent':o.source==='SAM'?'federal':o.source==='MANUAL'?'saved-local':'';
+    const srcBadgeCls = {'SAM':'sam','USA':'usa','IDV':'idv','SUB':'sub','GRANTS':'grants','TANGO':'tango','FEDREG':'fedreg','SOCRATA':'tango','CKAN':'grants'}[o.source]||'saved';
+    const srcLabel = {'SAM':'SAM.gov','USA':'USASpending','IDV':'IDV/IDIQ','SUB':'Subaward','GRANTS':'Grants','TANGO':'Tango','FEDREG':'Fed Register','SOCRATA':'Socrata','CKAN':'CKAN'}[o.source]||'Manual';
+    return `<div class="rc ${borderCls}"  data-id="${o.id}" onclick="openDetail(this.dataset.id)">
+      <div>
+        <div class="rh">
+          <span class="src-badge ${srcBadgeCls}">${srcLabel}</span>
+          <div class="rt">${o.title}</div>
+        </div>
+        <div class="rm">
+          <div class="mi"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18M3 7v1a3 3 0 006 0V7m6 0v1a3 3 0 006 0V7M3 7l.5-4h17l.5 4"/></svg>${o.agency}</div>
+          ${o.state?`<div class="mi"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>${o.city?o.city+', ':''} ${o.state}</div>`:''}
+          ${o.solNum?`<div class="mi"># ${o.solNum}</div>`:''}
+          ${o.awardAmount>0?`<div class="mi"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" x2="12" y1="1" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>$${Number(o.awardAmount).toLocaleString()}</div>`:o.estValue?`<div class="mi" title="Estimated value from description"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" x2="12" y1="1" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>~$${o.estValue}</div>`:''}
+        </div>
+        ${o.desc?`<div class="rd">${o.desc.substring(0,220)}${o.desc.length>220?'…':''}</div>`:''}
+        <div class="rtags">
+          ${(()=>{const r=getRelevanceLabel(o._score||0);return r.cls!=='rel-none'?`<span class="rel-badge ${r.cls}">${r.label}<span class="rel-score">${o._score||0}</span></span>`:''})()}
+          ${o.naicsCode?`<span class="tag naics">NAICS ${o.naicsCode}</span>`:''}
+          ${o.noticeType?`<span class="tag">${o.noticeType}</span>`:''}
+          ${o.setAside?`<span class="set-aside-badge">${o.setAside}</span>`:''}
+          ${isActive?'<span class="tag" style="background:var(--mint-dim);color:var(--mint);border-color:rgba(0,232,122,.2)">Active</span>':''}
+        </div>
+      </div>
+      <div class="ra" onclick="event.stopPropagation()">
+        <div class="dc ${dlc}">${dll}</div>
+        ${o.postedDate?`<div class="notice-type">Posted ${fmtDate(o.postedDate)}</div>`:''}
+        <div class="cbs">
+          <button class="bi${o.saved?' sv':''}" onclick="toggleSave('${o.id}')" title="${o.saved?'Unsave':'Save'}">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="${o.saved?'currentColor':'none'}" stroke="currentColor" stroke-width="2"><path d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z"/></svg>
+          </button>
+          <button class="bi" onclick="window.open('${o.uiLink}','_blank')" title="Open source">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" x2="21" y1="14" y2="3"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function showSkeletons() {
+  document.getElementById('rfp-list').innerHTML = Array(6).fill(0).map(()=>`
+    <div class="skeleton-card">
+      <div class="skel" style="height:14px;width:80px;margin-bottom:12px"></div>
+      <div class="skel" style="height:22px;width:70%;margin-bottom:12px"></div>
+      <div class="skel" style="height:12px;width:50%;margin-bottom:8px"></div>
+      <div class="skel" style="height:36px;width:90%;margin-bottom:8px"></div>
+      <div style="display:flex;gap:6px"><div class="skel" style="height:22px;width:80px"></div><div class="skel" style="height:22px;width:120px"></div></div>
+    </div>`).join('');
+}
+
+function updateBanner() {
+  const all = [...allOpps, ...manualOpps];
+  const urgent = all.filter(o=>{ const d=daysUntil(o.deadline); return d!==null&&d<=30; });
+  const agencies = new Set(all.map(o=>o.agency).filter(Boolean));
+  document.getElementById('ib-total').textContent = all.length || '—';
+  document.getElementById('s-live').textContent = allOpps.length || '—';
+  document.getElementById('s-total').textContent = all.length || '—';
+  document.getElementById('s-urgent').textContent = all.filter(o=>{ const d=daysUntil(o.deadline); return d!==null&&d<=7; }).length || '—';
+  document.getElementById('s-saved').textContent = savedIds.size;
+  document.getElementById('ib-soon').textContent = urgent.length || '—';
+  document.getElementById('ib-soon-sub').textContent = urgent.length+' closing within 30 days';
+  document.getElementById('ib-agencies').textContent = agencies.size || '—';
+  document.getElementById('ib-src').textContent = allOpps.length+' from live APIs';
+  const alertBtn = document.getElementById('alert-btn');
+  const urgentCount = all.filter(o=>{ const d=daysUntil(o.deadline); return d!==null&&d<=7; }).length;
+  if(urgentCount>0) { alertBtn.style.display='flex'; document.getElementById('alert-count').textContent=urgentCount; }
+  // Update naics counts
+  const naicsCounts = {};
+  all.forEach(o=>{ if(o.naicsCode) naicsCounts[o.naicsCode]=(naicsCounts[o.naicsCode]||0)+1; });
+  ['621111','812990','621999'].forEach(n=>{
+    const el=document.getElementById('fp-'+n); if(el) el.textContent=naicsCounts[n]||0;
+  });
+  document.getElementById('fp-all').textContent = all.length;
+}
+
+// ── DETAIL MODAL ───────────────────────────────────────────────────
+function openDetail(id) {
+  const o = [...allOpps,...manualOpps].find(x=>x.id===id);
+  if(!o) return;
+  detailOpp = o;
+  document.getElementById('dm-title').textContent = o.title;
+  document.getElementById('dm-sub').textContent = [o.agency, o.solNum?'#'+o.solNum:'', o.noticeType].filter(Boolean).join(' · ');
+  const saveBtn = document.getElementById('dm-save-btn');
+  saveBtn.textContent = o.saved ? 'Unsave' : 'Save Opportunity';
+  saveBtn.style.background = o.saved ? 'var(--mint)' : '';
+  saveBtn.style.color = o.saved ? '#d0f0d0' : '';
+  document.getElementById('dm-link-btn').textContent = o.source==='USA' ? 'Open on USASpending ↗' : 'Open on SAM.gov ↗';
+  document.getElementById('dm-grid').innerHTML = `
+    <div class="det-field"><div class="det-lbl">Agency</div><div class="det-val">${o.agency}</div></div>
+    <div class="det-field"><div class="det-lbl">Notice Type</div><div class="det-val">${o.noticeType||'N/A'}</div></div>
+    <div class="det-field"><div class="det-lbl">NAICS Code</div><div class="det-val">${o.naicsCode||'N/A'} ${o.naicsDesc?'— '+o.naicsDesc:''}</div></div>
+    <div class="det-field"><div class="det-lbl">Set-Aside</div><div class="det-val">${o.setAside||'Unrestricted / N/A'}</div></div>
+    <div class="det-field"><div class="det-lbl">Solicitation #</div><div class="det-val">${o.solNum||'N/A'}</div></div>
+    <div class="det-field"><div class="det-lbl">Posted Date</div><div class="det-val">${fmtDate(o.postedDate)}</div></div>
+    <div class="det-field"><div class="det-lbl">Response Deadline</div><div class="det-val">${fmtDate(o.deadline)}${daysUntil(o.deadline)!==null?' ('+daysUntil(o.deadline)+' days)':''}</div></div>
+    <div class="det-field"><div class="det-lbl">Place of Performance</div><div class="det-val">${[o.city,o.state].filter(Boolean).join(', ')||'N/A'}</div></div>
+    ${o.contact?`<div class="det-field"><div class="det-lbl">Contact</div><div class="det-val"><a href="mailto:${o.contact}">${o.contact}</a></div></div>`:''}
+    ${o.awardAmount?`<div class="det-field"><div class="det-lbl">Award Amount</div><div class="det-val">$${Number(o.awardAmount).toLocaleString()}</div></div>`:''}
+    ${o.recipient?`<div class="det-field"><div class="det-lbl">Recipient</div><div class="det-val">${o.recipient}</div></div>`:''}
+    ${o.desc?`<div class="det-field full"><div class="det-lbl">Description</div><div class="det-val">${o.desc}</div></div>`:''}
+    <div class="det-field full"><div class="det-lbl">Source URL</div><div class="det-val"><a href="${o.uiLink}" target="_blank">${o.uiLink}</a></div></div>
+  `;
+  // AI Proposal
+  const aiOut = document.getElementById('ai-out');
+  aiOut.innerHTML = '<div style="font-family:var(--fm);font-size:12px;color:var(--slate);padding:8px">Generating proposal intelligence<span class="ai-cur"></span></div>';
+  document.getElementById('detail-modal').classList.add('open');
+  // Load incumbent data and AI proposal
+  fetchIncumbent(o);
+  setTimeout(()=>generateProposal(o), 600);
+}
+function closeDetail() { document.getElementById('detail-modal').classList.remove('open'); }
+function openSamLink() { if(detailOpp) window.open(detailOpp.uiLink,'_blank'); }
+function toggleSaveFromModal() {
+  if(!detailOpp) return;
+  toggleSave(detailOpp.id);
+  detailOpp.saved = savedIds.has(detailOpp.id);
+  const btn = document.getElementById('dm-save-btn');
+  btn.textContent = detailOpp.saved?'Unsave':'Save Opportunity';
+  btn.style.background = detailOpp.saved?'var(--mint)':'';
+  btn.style.color = detailOpp.saved?'#d0f0d0':'';
+}
+
+function generateProposal(o) {
+  const aiOut = document.getElementById('ai-out');
+  const days = daysUntil(o.deadline);
+  const sections = [
+    {l:'Executive Summary', b:`Occu-Med is positioned to respond to this ${o.noticeType||'opportunity'} from ${o.agency}. ${o.naicsCode==='621111'?'Our core occupational medicine capabilities — pre-employment physicals, DOT drug testing, OSHA surveillance, and return-to-work programs — directly align with NAICS 621111 requirements.':o.naicsCode==='812990'?'Our DOT-compliant drug and alcohol testing infrastructure, MRO services, and random pool management directly address this 812990 solicitation.':'Our occupational health service line covers the full scope relevant to this solicitation.'}`},
+    {l:'Scope Match', b:`${o.setAside||o.setAsideCode?'This is a '+(o.setAside||o.setAsideCode)+' set-aside — confirm eligibility before submitting. ':''}${o.state?'Place of performance: '+o.state+'. ':''} Key services to highlight: occupational medicine, drug/alcohol testing, medical surveillance, pre-employment screening, and workers compensation case management.`},
+    {l:'Competitive Strategy', b:`${days!==null&&days<=14?'⚠ URGENT: Only '+days+' days to respond. Prioritize immediately. ':''}${o.source==='SAM'?'Search SAM.gov for the full solicitation package at: '+o.uiLink:'Review the full award history on USASpending.gov to understand incumbent and pricing.'} Identify whether incumbent is Concentra, US HealthWorks, or a regional provider — position Occu-Med on local responsiveness and dedicated account management.`},
+    {l:'Next Steps', b:`1. Download full solicitation from ${o.uiLink}\n2. Note Q&A deadline — submit written questions\n3. Verify SAM.gov registration is current (CAGE code, NAICS 621111 listed)\n4. Prepare past performance references for similar government contracts\n5. Draft capability statement highlighting ${o.state||'regional'} presence`},
+  ];
+  aiOut.innerHTML='';
+  let i=0;
+  function next(){
+    if(i>=sections.length) return;
+    const s=sections[i], div=document.createElement('div'); div.className='ai-sec';
+    div.style.cssText='opacity:0;transform:translateY(5px);transition:all .35s ease';
+    div.innerHTML='<div class="ai-sec-lbl">'+s.l+'</div><div class="ai-sec-body">'+s.b.replace(/\n/g,'<br>')+'</div>';
+    aiOut.appendChild(div); requestAnimationFrame(()=>{div.style.opacity='1';div.style.transform='translateY(0)';}); i++;
+    setTimeout(next, 280+Math.random()*150);
+  }
+  next();
+}
+function copyProposal() {
+  try{ navigator.clipboard.writeText(document.getElementById('ai-out').innerText).then(()=>showToast('Copied','ok')); }catch(e){ showToast('Select and copy manually'); }
+}
+
+// ── SAVE / PERSIST ─────────────────────────────────────────────────
+function toggleSave(id) {
+  if(savedIds.has(id)) savedIds.delete(id); else savedIds.add(id);
+  localStorage.setItem('om_saved', JSON.stringify([...savedIds]));
+  [...allOpps,...manualOpps].forEach(o=>{ o.saved=savedIds.has(o.id); });
+  document.getElementById('s-saved').textContent=savedIds.size;
+  render();
+  showToast(savedIds.has(id)?'Saved':'Removed from saved');
+}
+
+// ── ALERTS ────────────────────────────────────────────────────────
+function toggleAlerts() {
+  const urgent=[...allOpps,...manualOpps].filter(o=>{const d=daysUntil(o.deadline);return d!==null&&d<=7;});
+  if(!urgent.length){showToast('No urgent deadlines');return;}
+  alert('URGENT DEADLINES (≤7 days):\n\n'+urgent.map(o=>`• ${o.title}\n  ${o.agency}\n  Deadline: ${fmtDate(o.deadline)} (${daysUntil(o.deadline)} days)`).join('\n\n'));
+}
+
+// ── MANUAL ADD ────────────────────────────────────────────────────
+function openAddModal(){ document.getElementById('add-modal').classList.add('open'); }
+function addManual(){
+  const t=document.getElementById('m-title').value.trim();
+  if(!t){showToast('Enter a title','err');return;}
+  const o={
+    id:'MANUAL-'+Date.now(), source:'MANUAL', active:true,
+    title:t, agency:document.getElementById('m-agency').value||'Unknown',
+    naicsCode:document.getElementById('m-naics').value||'621111', naicsDesc:'',
+    solNum:'', noticeId:'', noticeType:'Manual Entry', setAside:'', setAsideCode:'',
+    postedDate:new Date(), deadline:dateStr(document.getElementById('m-deadline').value),
+    archiveDate:null, state:'', city:'',
+    desc:document.getElementById('m-desc').value||'',
+    uiLink:document.getElementById('m-url').value||'#',
+    contact:'', saved:true,
+    awardAmount:parseFloat((document.getElementById('m-value').value||'0').replace(/[^0-9.]/g,''))||0,
+    recipient:'', classCode:'', baseType:'Manual',
+  };
+  savedIds.add(o.id);
+  localStorage.setItem('om_saved',JSON.stringify([...savedIds]));
+  manualOpps.unshift(o);
+  document.getElementById('add-modal').classList.remove('open');
+  document.getElementById('cnt-MANUAL').textContent=manualOpps.length;
+  render(); updateBanner();
+  showToast('Opportunity saved','ok');
+}
+
+// ── FILTERS ───────────────────────────────────────────────────────
+function switchTab(t,el){currTab=t;document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));el.classList.add('active');render();}
+function setSourceFilter(s,evt){
+  srcFilter=s;
+  document.querySelectorAll('.src-row').forEach(r=>r.classList.remove('active'));
+  (evt||event).currentTarget.classList.add('active');
+  // If selected source has no data, warn user
+  const count = [...allOpps,...manualOpps].filter(o=>s==='all'||(s==='STATE'?o.source.startsWith('STATE-'):o.source===s)).length;
+  if(s!=='all' && count===0) showToast('No data from this source — try refreshing','err');
+  render();
+}
+function setNaics(n,el){naicsFilter=n;document.querySelectorAll('.fp').forEach(x=>{if(x.onclick&&x.onclick.toString().includes('setNaics'))x.classList.remove('active')});el.classList.add('active');render();}
+function setSetAside(s,el){setAsideFilter=s;document.querySelectorAll('.fp').forEach(x=>{if(x.onclick&&x.onclick.toString().includes('setSetAside'))x.classList.remove('active')});el.classList.add('active');render();}
+
+// ── INDICATOR HELPERS ─────────────────────────────────────────────
+function setInd(src,state){
+  const el=document.getElementById('ind-'+src); if(!el)return;
+  el.className='src-indicator '+state;
+}
+
+// ── TOAST ─────────────────────────────────────────────────────────
+function showToast(msg,cls){
+  const t=document.getElementById('toast'); t.textContent=msg; t.className='toast'+(cls?' '+cls:'');
+  void t.offsetWidth; t.classList.add('show'); clearTimeout(t._t); t._t=setTimeout(()=>t.classList.remove('show'),3200);
+}
+
+// ── KEYBOARD ──────────────────────────────────────────────────────
+document.addEventListener('keydown',e=>{
+  if(e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA'){if(e.key==='Escape')e.target.blur();return;}
+  if(e.key==='/')  {e.preventDefault();document.getElementById('search').focus();}
+  if(e.key==='r'||e.key==='R') fetchAllSources();
+  if(e.key==='Escape') {closeDetail();document.getElementById('add-modal').classList.remove('open');}
+});
+
+// ── CLOSE MODAL ON BACKDROP ───────────────────────────────────────
+document.getElementById('detail-modal').addEventListener('click',e=>{if(e.target===document.getElementById('detail-modal'))closeDetail();});
+document.getElementById('add-modal').addEventListener('click',e=>{if(e.target===document.getElementById('add-modal'))document.getElementById('add-modal').classList.remove('open');});
+document.getElementById('teaming-modal').addEventListener('click',e=>{if(e.target===document.getElementById('teaming-modal'))document.getElementById('teaming-modal').classList.remove('open');});
+document.getElementById('outline-modal').addEventListener('click',e=>{if(e.target===document.getElementById('outline-modal'))document.getElementById('outline-modal').classList.remove('open');});
+
+// ── AUTO-FETCH ON LOAD ────────────────────────────────────────────
+window.addEventListener('load', () => {
+  setStatus('Ready — click "Refresh Live Data" or press R to fetch');
+  renderKeywordTags();
+});
+</script>
+</body>
+</html>
